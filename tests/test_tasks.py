@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from app.pipeline import NoSubtitlesError
 from app.tasks import run_transcript_pipeline

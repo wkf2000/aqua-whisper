@@ -3,9 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from app.pipeline import NoSubtitlesError, get_transcript
+from app.pipeline import get_transcript
 
 
 def _make_segment(start: float, end: float, text: str) -> object:

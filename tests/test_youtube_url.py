@@ -1,7 +1,5 @@
 """Tests for YouTube URL validation."""
 
-import pytest
-
 from app.youtube import is_youtube_url
 
 
