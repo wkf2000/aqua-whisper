@@ -20,6 +20,12 @@ def validation_exception_handler(_request: Request, exc: RequestValidationError)
     return JSONResponse(status_code=400, content={"detail": "Invalid request body"})
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    """Health check: returns 200 when API is up. No auth required."""
+    return {"status": "ok"}
+
+
 @app.get("/protected")
 def protected(_: None = Depends(require_api_key)) -> dict[str, bool]:
     """Stub protected route for auth tests. Returns 200 with ok: true when auth passes."""
