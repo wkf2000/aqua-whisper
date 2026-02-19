@@ -1,0 +1,24 @@
+# aqua-whisper: API + Celery worker.
+#
+# Redis is external — not included in this Compose file. You must have a Redis
+# instance running and set REDIS_URL (e.g. via .env or environment). For local
+# Docker, use redis://host.docker.internal:6379/0 or redis://<host>:6379/0.
+# The api service also requires API_KEY for HTTP request validation; set it via
+# .env or environment.
+
+services:
+  api:
+    build: .
+    image: aqua-whisper
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://host.docker.internal:6379/0}
+      API_KEY: ${API_KEY:-}
+
+  worker:
+    image: aqua-whisper
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://host.docker.internal:6379/0}
