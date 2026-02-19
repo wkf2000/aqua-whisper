@@ -3,18 +3,25 @@
 import httpx
 
 from app.celery_app import celery_app
-
-STUB_TRANSCRIPT = "WEBVTT\n\n"
+from app.pipeline import get_transcript
 
 
 @celery_app.task
 def run_transcript_pipeline(task_id: str, video_url: str, webhook_url: str) -> None:
     """Run transcript pipeline for video_url and POST result to webhook_url."""
-    payload = {
-        "task_id": task_id,
-        "status": "success",
-        "source": "manual",
-        "transcript": STUB_TRANSCRIPT,
-    }
+    try:
+        source, transcript = get_transcript(video_url)
+        payload = {
+            "task_id": task_id,
+            "status": "success",
+            "source": source,
+            "transcript": transcript,
+        }
+    except Exception as e:
+        payload = {
+            "task_id": task_id,
+            "status": "failed",
+            "error": str(e),
+        }
     with httpx.Client() as client:
         client.post(webhook_url, json=payload)
