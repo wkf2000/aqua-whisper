@@ -49,3 +49,13 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t aqua-whisper -t aqua-whisper:${{ github.sha }} .
