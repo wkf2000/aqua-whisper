@@ -11,6 +11,7 @@ dependencies = [
     "redis",
     "httpx",
     "pydantic-settings",
+    "faster-whisper",
 ]
 
 [project.optional-dependencies]
