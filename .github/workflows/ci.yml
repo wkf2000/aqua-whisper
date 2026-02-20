@@ -108,10 +108,10 @@ jobs:
             
             # Check if containers are running
             echo "Checking container status..."
-            if docker compose -f docker-compose.yml --env-file .env.image ps | grep -q "Up"; then
+            if docker compose -f docker-compose.yml ps | grep -q "Up"; then
               echo "✅ Containers are running"
             else
               echo "❌ Containers are not running"
-              docker compose -f docker-compose.yml --env-file .env.image logs --tail=20
+              docker compose -f docker-compose.yml logs --tail=20
               exit 1
             fi
