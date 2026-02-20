@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    API_KEY: str = ""
+    API_KEY: str = "Your API key here"
     REDIS_URL: str = "redis://localhost:6379/0"
 
 
