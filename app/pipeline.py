@@ -37,7 +37,14 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         out_base = str(Path(temp_dir) / "subs")
         # Try manual subtitles first.
         subprocess.run(
-            ["yt-dlp", "--write-sub", "--skip-download", "--output", out_base, video_url],
+            [
+                "yt-dlp",
+                "--match-filter", "duration>60",
+                "--write-sub",
+                "--skip-download",
+                "--output", out_base,
+                video_url,
+            ],
             capture_output=True,
         )
         vtt_files = list(Path(temp_dir).glob("*.vtt"))
@@ -48,6 +55,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         subprocess.run(
             [
                 "yt-dlp",
+                "--match-filter", "duration>60",
                 "--write-auto-sub",
                 "--skip-download",
                 "--output",
@@ -65,6 +73,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         subprocess.run(
             [
                 "yt-dlp",
+                "--match-filter", "duration>60",
                 "-x",
                 "--audio-format",
                 "mp3",
