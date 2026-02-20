@@ -19,6 +19,7 @@ WORKDIR /app
 
 # Copy project and install Python deps (includes faster-whisper, FastAPI, Celery, etc.)
 COPY pyproject.toml ./
+COPY README.md ./
 COPY app ./app
 
 RUN pip install --no-cache-dir .
