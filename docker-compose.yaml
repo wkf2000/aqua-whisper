@@ -5,26 +5,42 @@
 # Docker, use redis://host.docker.internal:6379/0 or redis://<host>:6379/0.
 # The api service also requires API_KEY for HTTP request validation; set it via
 # .env or environment.
+#
+# Image: set AQUA_WHISPER_IMAGE for production (e.g. ghcr.io/owner/aqua-whisper:latest).
+# Unset = local build as aqua-whisper:latest.
 
 services:
   api:
     build: .
-    image: aqua-whisper
+    image: ghcr.io/wkf2000/aqua-whisper:latest
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     networks:
       - 1panel-network
     ports:
-      - "8000:8000"
+      - "8509:8000"
     env_file:
       - .env
+    volumes:
+      - whisper-model:/whisper-model
 
   worker:
-    image: aqua-whisper
+    build: .
+    image: ghcr.io/wkf2000/aqua-whisper:latest
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env
     networks:
       - 1panel-network
+    volumes:
+      - whisper-model:/whisper-model
+
+volumes:
+  whisper-model:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/michael/aqua-whisper/whisper-model/faster-whisper-base
 
 networks:
   1panel-network:
