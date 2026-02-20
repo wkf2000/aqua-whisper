@@ -5,7 +5,7 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Features
 
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
-- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns VTT.
+- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text.
 - **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
 
@@ -30,7 +30,8 @@ export REDIS_URL=redis://localhost:6379/0
 uv run uvicorn app.main:app --reload --port 8000
 
 # In another terminal: run worker
-uv run celery -A app.celery_app worker --loglevel=info --concurrency=1
+# On macOS: use --pool=solo to avoid SIGABRT when tasks load faster-whisper (prefork + ObjC fork-safety). Linux/Docker can use the default prefork.
+uv run celery -A app.celery_app worker --loglevel=info --concurrency=1 --pool=solo
 ```
 
 ### Docker (API + worker)
@@ -55,7 +56,7 @@ docker compose up --build
 | `GET /health`      | No   | 200 when API is up |
 | `POST /transcript` | Yes  | Body: `video_url`, `webhook_url` (YouTube only). Returns 202 + `task_id`. |
 
-**Webhook (worker → you):** One POST when the job finishes. Payload: `task_id`, `status` (`"success"` \| `"failed"`), and on success `source` (`"manual"` \| `"auto"` \| `"whisper"`) and `transcript` (VTT string); on failure `error`.
+**Webhook (worker → you):** One POST when the job finishes. Payload: `task_id`, `status` (`"success"` \| `"failed"`), and on success `source` (`"manual"` \| `"auto"` \| `"whisper"`) and `transcript` (plain text); on failure `error`.
 
 ## Environment
 

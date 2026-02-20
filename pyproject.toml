@@ -12,6 +12,7 @@ dependencies = [
     "httpx",
     "pydantic-settings",
     "faster-whisper",
+    "yt-dlp",
 ]
 
 [project.optional-dependencies]
