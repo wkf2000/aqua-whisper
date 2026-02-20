@@ -12,6 +12,7 @@
 services:
   api:
     image: ghcr.io/wkf2000/aqua-whisper:latest
+    container_name: aqua-whisper-api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     networks:
       - 1panel-network
@@ -24,6 +25,7 @@ services:
 
   worker:
     image: ghcr.io/wkf2000/aqua-whisper:latest
+    container_name: aqua-whisper-worker
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env
