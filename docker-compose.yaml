@@ -11,6 +11,8 @@ services:
     build: .
     image: aqua-whisper
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    networks:
+      - 1panel-network
     ports:
       - "8000:8000"
     env_file:
@@ -21,3 +23,9 @@ services:
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env
+    networks:
+      - 1panel-network
+
+networks:
+  1panel-network:
+    external: true
