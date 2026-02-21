@@ -8,3 +8,4 @@ class TranscriptRequest(BaseModel):
 
     video_url: str
     webhook_url: str
+    author: str = "unknown"

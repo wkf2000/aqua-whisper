@@ -36,7 +36,12 @@ def test_transcript_valid_body_and_youtube_and_api_key_returns_202_with_task_id(
     mock_apply.assert_called_once()
     call_kwargs = mock_apply.call_args[1]
     args = call_kwargs["args"]
-    assert args == [data["task_id"], VALID_BODY["video_url"], VALID_BODY["webhook_url"]]
+    assert args == [
+        data["task_id"],
+        VALID_BODY["video_url"],
+        VALID_BODY["webhook_url"],
+        "unknown",
+    ]
 
 
 def test_transcript_missing_video_url_returns_400() -> None:
@@ -73,6 +78,34 @@ def test_transcript_non_youtube_url_returns_400() -> None:
         headers={"X-API-Key": "test-secret-key"},
     )
     assert response.status_code == 400
+
+
+def test_transcript_author_defaults_to_unknown() -> None:
+    """When author is omitted, it defaults to 'unknown' and is passed to the task."""
+    with patch("app.main.run_transcript_pipeline.apply_async") as mock_apply:
+        mock_apply.return_value = None
+        response = client.post(
+            "/transcript",
+            json=VALID_BODY,
+            headers={"X-API-Key": "test-secret-key"},
+        )
+    assert response.status_code == 202
+    args = mock_apply.call_args[1]["args"]
+    assert args[3] == "unknown"
+
+
+def test_transcript_author_in_body_passed_to_task() -> None:
+    """When author is provided in body, it is passed to the task."""
+    with patch("app.main.run_transcript_pipeline.apply_async") as mock_apply:
+        mock_apply.return_value = None
+        response = client.post(
+            "/transcript",
+            json={**VALID_BODY, "author": "alice"},
+            headers={"X-API-Key": "test-secret-key"},
+        )
+    assert response.status_code == 202
+    args = mock_apply.call_args[1]["args"]
+    assert args[3] == "alice"
 
 
 def test_transcript_invalid_api_key_returns_401() -> None:

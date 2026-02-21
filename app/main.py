@@ -41,5 +41,7 @@ def transcript(
     if not is_youtube_url(body.video_url):
         raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
     task_id = str(uuid4())
-    run_transcript_pipeline.apply_async(args=[task_id, body.video_url, body.webhook_url])
+    run_transcript_pipeline.apply_async(
+        args=[task_id, body.video_url, body.webhook_url, body.author]
+    )
     return {"task_id": task_id}

@@ -25,7 +25,7 @@ def test_task_posts_success_payload_when_get_transcript_returns() -> None:
     ):
         mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_client_cls.return_value.__exit__.return_value = None
-        run_transcript_pipeline.run(task_id, video_url, webhook_url)
+        run_transcript_pipeline.run(task_id, video_url, webhook_url, "unknown")
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
@@ -35,6 +35,7 @@ def test_task_posts_success_payload_when_get_transcript_returns() -> None:
         "status": "success",
         "source": source,
         "transcript": transcript,
+        "author": "unknown",
     }
 
 
@@ -55,7 +56,7 @@ def test_task_posts_failed_payload_when_get_transcript_raises() -> None:
     ):
         mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_client_cls.return_value.__exit__.return_value = None
-        run_transcript_pipeline.run(task_id, video_url, webhook_url)
+        run_transcript_pipeline.run(task_id, video_url, webhook_url, "unknown")
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
@@ -64,6 +65,7 @@ def test_task_posts_failed_payload_when_get_transcript_raises() -> None:
         "task_id": task_id,
         "status": "failed",
         "error": error_message,
+        "author": "unknown",
     }
 
 
@@ -84,9 +86,10 @@ def test_task_posts_failed_payload_on_any_exception() -> None:
     ):
         mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_client_cls.return_value.__exit__.return_value = None
-        run_transcript_pipeline.run(task_id, video_url, webhook_url)
+        run_transcript_pipeline.run(task_id, video_url, webhook_url, "unknown")
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
     assert call_kwargs[1]["json"]["status"] == "failed"
     assert call_kwargs[1]["json"]["error"] == error_message
+    assert call_kwargs[1]["json"]["author"] == "unknown"
