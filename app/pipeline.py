@@ -1,6 +1,5 @@
 """Transcript pipeline: yt-dlp manual/auto subtitles, then Whisper fallback."""
 
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,23 +14,16 @@ class NoSubtitlesError(Exception):
     """Raised when no manual or auto subtitles are available for the video."""
 
 
-# VTT timestamp line (e.g. "00:00:01.000 --> 00:00:04.000")
-_VTT_TIMING = re.compile(r"^\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}")
-
-
-def _vtt_to_plain_text(vtt: str) -> str:
-    """Extract plain text from WEBVTT content (one line per cue)."""
-    lines: list[str] = []
-    for line in vtt.strip().splitlines():
-        line = line.strip()
-        if not line or line == "WEBVTT" or _VTT_TIMING.match(line) or line.isdigit():
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()
+def _seconds_to_vtt_ts(seconds: float) -> str:
+    """Format seconds as VTT timestamp HH:MM:SS.mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 
 def get_transcript(video_url: str) -> tuple[str, str]:
-    """Return (source, plain_text_content). Raises NoSubtitlesError if no subtitles available."""
+    """Return (source, vtt_content). Raises NoSubtitlesError if no subtitles available."""
     temp_dir = mkdtemp()
     try:
         out_base = str(Path(temp_dir) / "subs")
@@ -49,7 +41,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         )
         vtt_files = list(Path(temp_dir).glob("*.vtt"))
         if vtt_files:
-            return ("manual", _vtt_to_plain_text(vtt_files[0].read_text()))
+            return ("manual", vtt_files[0].read_text())
 
         # Try auto-generated subtitles.
         subprocess.run(
@@ -66,9 +58,9 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         )
         vtt_files = list(Path(temp_dir).glob("*.vtt"))
         if vtt_files:
-            return ("auto", _vtt_to_plain_text(vtt_files[0].read_text()))
+            return ("auto", vtt_files[0].read_text())
 
-        # Whisper fallback: download audio with yt-dlp -x, transcribe with faster-whisper, return plain text.
+        # Whisper fallback: download audio with yt-dlp -x, transcribe with faster-whisper, return vtt text.
         audio_out = str(Path(temp_dir) / "audio_%(id)s.%(ext)s")
         subprocess.run(
             [
@@ -99,7 +91,13 @@ def get_transcript(video_url: str) -> tuple[str, str]:
                 model_kwargs["download_root"] = settings.WHISPER_DOWNLOAD_ROOT
             model = WhisperModel(model_path_or_name, **model_kwargs)
         segments, _ = model.transcribe(audio_path)
-        plain_text = "\n".join(seg.text.strip() for seg in segments if seg.text.strip()).strip()
-        return ("whisper", plain_text)
+        vtt_lines = ["WEBVTT", ""]
+        for seg in segments:
+            if not seg.text.strip():
+                continue
+            vtt_lines.append(f"{_seconds_to_vtt_ts(seg.start)} --> {_seconds_to_vtt_ts(seg.end)}")
+            vtt_lines.append(seg.text.strip())
+            vtt_lines.append("")
+        return ("whisper", "\n".join(vtt_lines).strip())
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
