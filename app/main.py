@@ -2,16 +2,38 @@
 
 from uuid import uuid4
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.auth import require_api_key
+from app.config import settings
+from app.logging_config import setup_logging
 from app.schemas import TranscriptRequest
 from app.tasks import run_transcript_pipeline
+from app.tracing import setup_tracing
 from app.youtube import is_youtube_url
 
+setup_logging(service_name="aqua-whisper-api", environment=settings.ENV)
+setup_tracing(service_name="aqua-whisper-api", environment=settings.ENV)
+
 app = FastAPI()
+logger = structlog.get_logger()
+
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    """Log a single structured event per request with basic metadata."""
+    response = await call_next(request)
+    logger.info(
+        "request",
+        path=request.url.path,
+        method=request.method,
+        status_code=response.status_code,
+        client_ip=request.client.host if request.client else None,
+    )
+    return response
 
 
 @app.exception_handler(RequestValidationError)

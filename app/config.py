@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     WHISPER_DOWNLOAD_ROOT: str | None = None
     # CTranslate2 compute type: "int8", "float16", "float32", or "auto" (default)
     WHISPER_COMPUTE_TYPE: str = "auto"
+    # Observability
+    ENV: str | None = None
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
 
 
 settings = Settings()
