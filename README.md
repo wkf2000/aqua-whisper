@@ -64,6 +64,23 @@ docker compose up --build
 |-------------|----------|-------------|
 | `API_KEY`   | Yes (API) | Shared secret for `POST /transcript` and `/protected`. |
 | `REDIS_URL` | Yes      | Redis broker URL for Celery (e.g. `redis://localhost:6379/0`). |
+| `ENV`       | No       | Environment label for logs/traces (e.g. `dev`, `prod`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP HTTP endpoint for traces (e.g. `http://openobserve:5080/api/default/v1/traces`). If unset, spans are not exported. |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | No | Optional headers: comma-separated `key=value` (e.g. `Authorization=Basic <base64>,stream-name=default` for OpenObserve). |
+
+## Logging and tracing
+
+### Logs
+
+- **Library:** [structlog](https://www.structlog.org/) — all app logs are JSON, one object per line, written to **stdout**.
+- **Fields:** `level`, `timestamp` (ISO/RFC3339), `service` (`aqua-whisper-api` or `aqua-whisper-worker`), optional `environment`, and when a span is active, `trace_id` and `span_id` for correlation.
+- **Flow:** In Docker, container stdout is collected by [Vector](https://vector.dev/) (`docker_logs` source with `codec: json`), then forwarded to OpenObserve (or another sink). No extra app config is needed for log shipping — just ensure the app logs to stdout.
+
+### Traces
+
+- **Library:** [OpenTelemetry](https://opentelemetry.io/) — the app and worker create spans (e.g. HTTP requests, `run_transcript_pipeline` task).
+- **Export:** If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, spans are sent via OTLP HTTP to that URL (e.g. OpenObserve at `http://<host>:5080/api/default/v1/traces`). Optional `OTEL_EXPORTER_OTLP_HEADERS` can set `Authorization: Basic ...` and `stream-name: default` to match OpenObserve’s ingest API. If endpoint is unset, no exporter is registered and tests/local runs do not try to connect to a collector.
+- **Correlation:** Logs automatically include `trace_id` and `span_id` when there is an active span, so you can link log lines to traces in OpenObserve.
 
 ## Tests and lint
 

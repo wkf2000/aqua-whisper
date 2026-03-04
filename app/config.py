@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # Observability
     ENV: str | None = None
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    # Optional. Comma-separated key=value (e.g. "Authorization=Basic xxx,stream-name=default").
+    OTEL_EXPORTER_OTLP_HEADERS: str | None = None
 
 
 settings = Settings()

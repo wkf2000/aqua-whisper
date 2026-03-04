@@ -15,6 +15,19 @@ from app.config import settings
 _TRACING_CONFIGURED = False
 
 
+def _parse_otlp_headers(headers_str: str | None) -> dict[str, str]:
+    """Parse OTEL_EXPORTER_OTLP_HEADERS (key1=value1,key2=value2) into a dict."""
+    if not headers_str or not headers_str.strip():
+        return {}
+    out: dict[str, str] = {}
+    for part in headers_str.split(","):
+        part = part.strip()
+        if "=" in part:
+            key, value = part.split("=", 1)
+            out[key.strip()] = value.strip()
+    return out
+
+
 def setup_tracing(service_name: str, environment: Optional[str] = None) -> None:
     """Configure a global TracerProvider with OTLP exporter to OpenObserve."""
     global _TRACING_CONFIGURED
@@ -32,7 +45,8 @@ def setup_tracing(service_name: str, environment: Optional[str] = None) -> None:
 
     endpoint = getattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", None)
     if endpoint:
-        exporter = OTLPSpanExporter(endpoint=endpoint)
+        headers = _parse_otlp_headers(getattr(settings, "OTEL_EXPORTER_OTLP_HEADERS", None))
+        exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers or None)
         span_processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(span_processor)
 
