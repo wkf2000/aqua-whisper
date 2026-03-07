@@ -21,6 +21,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY README.md ./
 COPY app ./app
+COPY static ./static
 
 RUN pip install --no-cache-dir .
 

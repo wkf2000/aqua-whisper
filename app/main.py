@@ -22,6 +22,7 @@ setup_logging(service_name="aqua-whisper-api", environment=settings.ENV)
 setup_tracing(service_name="aqua-whisper-api", environment=settings.ENV)
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_STATIC_DIR.mkdir(exist_ok=True)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
