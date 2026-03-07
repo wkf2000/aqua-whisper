@@ -1,24 +1,30 @@
 """FastAPI app with API key–protected routes."""
 
+from pathlib import Path
 from uuid import uuid4
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.auth import require_api_key
 from app.config import settings
 from app.logging_config import setup_logging
-from app.schemas import TranscriptRequest
-from app.tasks import run_transcript_pipeline
+from app.schemas import TranscriptRequest, UITranscriptRequest
+from app.store import get_task_result
+from app.tasks import run_transcript_pipeline, run_transcript_pipeline_ui
 from app.tracing import setup_tracing
 from app.youtube import is_youtube_url
 
 setup_logging(service_name="aqua-whisper-api", environment=settings.ENV)
 setup_tracing(service_name="aqua-whisper-api", environment=settings.ENV)
 
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
 app = FastAPI()
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 logger = structlog.get_logger()
 
 
@@ -67,3 +73,31 @@ def transcript(
         args=[task_id, body.video_url, body.webhook_url, body.author]
     )
     return {"task_id": task_id}
+
+
+# ── UI (unauthenticated) ────────────────────────────────────────────
+
+
+@app.get("/")
+def ui_index() -> FileResponse:
+    """Serve the single-page frontend."""
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+@app.post("/ui/transcript", status_code=202)
+def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
+    """Accept a YouTube URL, enqueue transcript task, return task_id."""
+    if not is_youtube_url(body.video_url):
+        raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
+    task_id = str(uuid4())
+    run_transcript_pipeline_ui.apply_async(args=[task_id, body.video_url])
+    return {"task_id": task_id}
+
+
+@app.get("/ui/transcript/{task_id}")
+def ui_transcript_status(task_id: str) -> dict:
+    """Poll for a UI transcript task result."""
+    result = get_task_result(task_id)
+    if result is None:
+        return {"status": "pending"}
+    return result

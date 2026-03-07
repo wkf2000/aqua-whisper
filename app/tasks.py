@@ -6,6 +6,7 @@ from opentelemetry import trace
 
 from app.celery_app import celery_app
 from app.pipeline import get_transcript
+from app.store import save_task_result
 
 logger = structlog.get_logger()
 tracer = trace.get_tracer(__name__)
@@ -61,3 +62,42 @@ def run_transcript_pipeline(
             }
         with httpx.Client() as client:
             client.post(webhook_url, json=payload)
+
+
+@celery_app.task
+def run_transcript_pipeline_ui(task_id: str, video_url: str) -> None:
+    """Run transcript pipeline and store result in Redis for frontend polling."""
+    with tracer.start_as_current_span("run_transcript_pipeline_ui") as span:
+        span.set_attribute("task.id", task_id)
+        span.set_attribute("video.url", video_url)
+
+        logger.info(
+            "run_transcript_pipeline_ui.start",
+            task_id=task_id,
+            video_url=video_url,
+        )
+        try:
+            source, transcript = get_transcript(video_url)
+            payload = {
+                "status": "success",
+                "source": source,
+                "transcript": transcript,
+            }
+            logger.info(
+                "run_transcript_pipeline_ui.success",
+                task_id=task_id,
+                video_url=video_url,
+                source=source,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "run_transcript_pipeline_ui.failed",
+                task_id=task_id,
+                video_url=video_url,
+                error=str(e),
+            )
+            payload = {
+                "status": "failed",
+                "error": str(e),
+            }
+        save_task_result(task_id, payload)
