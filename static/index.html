@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aqua Whisper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            surface: '#1E293B',
+            bg: '#0F172A',
+            accent: '#22C55E',
+            muted: '#94A3B8',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 24px; height: 24px;
+      border: 3px solid #334155;
+      border-top-color: #22C55E;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation-duration: 2s; }
+    }
+  </style>
+</head>
+<body class="bg-bg text-slate-50 font-sans min-h-screen flex items-center justify-center px-4 sm:px-6 lg:px-8">
+
+  <main class="w-full max-w-2xl">
+    <div class="text-center mb-10">
+      <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight">Aqua Whisper</h1>
+      <p class="mt-2 text-muted text-sm sm:text-base">Paste a YouTube URL to get its transcript</p>
+    </div>
+
+    <form id="form" class="flex gap-3" onsubmit="return handleSubmit(event)">
+      <input
+        id="url-input"
+        type="url"
+        placeholder="https://www.youtube.com/watch?v=..."
+        required
+        class="flex-1 h-10 px-3 rounded-lg bg-surface text-slate-50 placeholder-muted border border-slate-700 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors duration-200"
+      />
+      <button
+        id="submit-btn"
+        type="submit"
+        class="h-10 px-5 rounded-lg bg-accent text-bg font-medium cursor-pointer hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Transcribe
+      </button>
+    </form>
+
+    <div id="status" class="mt-6 flex items-center gap-3 hidden">
+      <div class="spinner"></div>
+      <span class="text-muted text-sm">Processing transcript&hellip;</span>
+    </div>
+
+    <div id="error" class="mt-6 hidden">
+      <p class="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3"></p>
+    </div>
+
+    <div id="result" class="mt-6 hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-muted uppercase tracking-wide font-medium">Transcript</span>
+        <span id="source-badge" class="text-xs text-muted bg-surface px-2 py-0.5 rounded"></span>
+      </div>
+      <pre id="transcript-text" class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700"></pre>
+    </div>
+  </main>
+
+  <script>
+    const POLL_INTERVAL = 3000;
+    const POLL_TIMEOUT  = 5 * 60 * 1000;
+
+    const $input   = document.getElementById('url-input');
+    const $btn     = document.getElementById('submit-btn');
+    const $status  = document.getElementById('status');
+    const $error   = document.getElementById('error');
+    const $result  = document.getElementById('result');
+    const $text    = document.getElementById('transcript-text');
+    const $source  = document.getElementById('source-badge');
+
+    function show(el)  { el.classList.remove('hidden'); }
+    function hide(el)  { el.classList.add('hidden'); }
+
+    function setError(msg) {
+      $error.querySelector('p').textContent = msg;
+      show($error);
+    }
+
+    function resetUI() {
+      hide($status); hide($error); hide($result);
+      $btn.disabled = false;
+    }
+
+    async function handleSubmit(e) {
+      e.preventDefault();
+      resetUI();
+
+      const url = $input.value.trim();
+      if (!url) return;
+
+      $btn.disabled = true;
+      show($status);
+
+      try {
+        const res = await fetch('/ui/transcript', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video_url: url }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(data?.detail || `Request failed (${res.status})`);
+        }
+
+        const { task_id } = await res.json();
+        pollResult(task_id);
+      } catch (err) {
+        hide($status);
+        setError(err.message);
+        $btn.disabled = false;
+      }
+    }
+
+    function pollResult(taskId) {
+      const start = Date.now();
+
+      const timer = setInterval(async () => {
+        if (Date.now() - start > POLL_TIMEOUT) {
+          clearInterval(timer);
+          hide($status);
+          setError('Timed out waiting for transcript. Please try again.');
+          $btn.disabled = false;
+          return;
+        }
+
+        try {
+          const res = await fetch(`/ui/transcript/${taskId}`);
+          const data = await res.json();
+
+          if (data.status === 'pending') return;
+
+          clearInterval(timer);
+          hide($status);
+
+          if (data.status === 'success') {
+            $text.textContent = data.transcript;
+            $source.textContent = `source: ${data.source}`;
+            show($result);
+          } else {
+            setError(data.error || 'Transcript processing failed.');
+          }
+
+          $btn.disabled = false;
+        } catch {
+          clearInterval(timer);
+          hide($status);
+          setError('Lost connection to the server.');
+          $btn.disabled = false;
+        }
+      }, POLL_INTERVAL);
+    }
+  </script>
+
+</body>
+</html>
