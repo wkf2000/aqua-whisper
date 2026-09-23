@@ -53,4 +53,3 @@ def setup_tracing(service_name: str, environment: Optional[str] = None) -> None:
     trace.set_tracer_provider(provider)
 
     _TRACING_CONFIGURED = True
-

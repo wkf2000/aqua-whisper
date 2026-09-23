@@ -8,10 +8,33 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.actor }}/aqua-whisper
+  IMAGE: ghcr.io/${{ github.repository_owner }}/aqua-whisper
 
 jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+
+      - name: Test
+        run: uv run pytest -v
+
   build-and-push:
+    needs: lint-and-test
+    # Only push images on pushes to main, not for every pull request.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,7 +52,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
@@ -39,7 +62,6 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -75,27 +97,24 @@ jobs:
           script: |
             # Navigate to deployment directory
             cd ${{ env.DEPLOY_PATH }}
-            
+
             # Pull latest images
             echo "Pulling latest images..."
             docker compose -f docker-compose.yml pull
-            
-            # Stop existing containers
-            echo "Stopping existing containers..."
-            docker compose -f docker-compose.yml down || true
-            
-            # Start containers with new images
+
+            # Start containers; Compose recreates only the services whose
+            # image or config changed (no full downtime from down + up).
             echo "Starting containers..."
             docker compose -f docker-compose.yml up -d
-            
+
             # Clean up unused images
             echo "Cleaning up unused Docker images..."
             docker image prune -f
-            
+
             # Show running containers
             echo "Current running containers:"
             docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-            
+
             echo "Deployment completed successfully!"
 
       - name: Verify deployment
@@ -107,7 +126,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd ${{ env.DEPLOY_PATH }}
-            
+
             # Check if containers are running
             echo "Checking container status..."
             if docker compose -f docker-compose.yml ps | grep -q "Up"; then

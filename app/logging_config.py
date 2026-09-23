@@ -66,4 +66,3 @@ def setup_logging(service_name: str, environment: str | None = None) -> None:
     if environment:
         bind_args["environment"] = environment
     logger.bind(**bind_args)
-

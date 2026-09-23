@@ -1,5 +1,7 @@
 """API key auth dependency."""
 
+import secrets
+
 from fastapi import Header, HTTPException
 
 from app.config import settings
@@ -15,5 +17,6 @@ async def require_api_key(
         token = authorization[7:].strip()
     elif x_api_key:
         token = x_api_key.strip()
-    if not token or token != settings.API_KEY:
+    # Constant-time comparison so the key length/content cannot be probed by timing.
+    if not token or not secrets.compare_digest(token, settings.API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")

@@ -5,7 +5,8 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Features
 
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
-- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text.
+- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); videos ≤ 60s are rejected with a clear error, and successful transcripts are cached by video id for `TRANSCRIPT_CACHE_TTL` seconds.
+- **Web UI** — Unauthenticated single-page frontend at `/` with `/ui/transcript` submission and polling endpoints. In production it sits behind Cloudflare, which handles rate limiting and bot protection; the API endpoints remain API-key protected.
 - **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
 
@@ -58,8 +59,9 @@ With no extra configuration the Compose file builds the image locally and publis
 
 Pushes to `main` are built and deployed automatically by CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
-1. **Build** — the image is pushed to `ghcr.io/wkf2000/aqua-whisper` (tagged `latest` plus the commit sha).
-2. **Deploy** — CI SSHes into the server and, in the deploy directory, runs `docker compose -f docker-compose.yml pull`, then `down` and `up -d`.
+1. **Check** — every push and PR runs `ruff check`, `ruff format --check`, and the pytest suite.
+2. **Build** — when checks pass, the image is pushed to `ghcr.io/wkf2000/aqua-whisper` (tagged `latest` plus the commit sha).
+3. **Deploy** — CI SSHes into the server and, in the deploy directory, runs `docker compose -f docker-compose.yml pull`, then `up -d` (Compose recreates only the services whose image or config changed, with no full downtime).
 
 The server keeps its **own copy** of the Compose file (named `docker-compose.yml`) and a `.env`; it is not a git clone of this repo. The server's `.env` holds the production values for the same variables the local defaults stand in for:
 
@@ -81,12 +83,30 @@ After changing `docker-compose.yaml` in this repo, copy it to the server as `doc
 
 **Webhook (worker → you):** One POST when the job finishes. Payload: `task_id`, `status` (`"success"` \| `"failed"`), and on success `source` (`"manual"` \| `"auto"` \| `"whisper"`) and `transcript` (plain text); on failure `error`.
 
+## Web UI
+
+The repository also ships a small frontend (`static/index.html`) served by the API:
+
+| Endpoint                | Auth | Description |
+|-------------------------|------|-------------|
+| `GET /`                 | No   | Single-page frontend. |
+| `POST /ui/transcript`   | No   | Body: `video_url` (YouTube only). Returns 202 + `task_id`. |
+| `GET /ui/transcript/{task_id}` | No | Polls the stored result: `pending`, or `success`/`failed` with `source` and `transcript`. |
+
+These endpoints carry no API key by design. In production the frontend is served behind **Cloudflare**, which provides rate limiting and bot protection; the API (`/transcript`, `/protected`) is additionally protected by the shared API key.
+
 ## Environment
 
 | Variable     | Required | Description |
 |-------------|----------|-------------|
-| `API_KEY`   | Yes (API) | Shared secret for `POST /transcript` and `/protected`. |
+| `API_KEY`   | Yes (API) | Shared secret for `POST /transcript` and `/protected`. Required: the app refuses to start without it. |
 | `REDIS_URL` | Yes      | Redis broker URL for Celery (e.g. `redis://localhost:6379/0`). |
+| `WHISPER_MODEL` | No   | Whisper model: size name (`base`, `small`, ...) or path to a local model dir. Default `base`. |
+| `WHISPER_COMPUTE_TYPE` | No | CTranslate2 compute type: `int8`, `float16`, `float32`, or `auto`. Default `auto`. |
+| `SUBTITLE_LANGS` | No   | Subtitle language regex(es) for yt-dlp `--sub-langs` (comma-separated; `all` for any language). Default `en`. |
+| `WHISPER_VAD_FILTER` | No | Skip non-speech segments in Whisper to reduce hallucinations. Default `true`. |
+| `WHISPER_BATCHED`  | No   | Use faster-whisper batched inference (faster on CPU, higher peak memory). Default `false`. |
+| `TRANSCRIPT_CACHE_TTL` | No | Cache successful transcripts by video id, in seconds. Default `604800` (7 days); `0` disables. |
 | `ENV`       | No       | Environment label for logs/traces (e.g. `dev`, `prod`). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP HTTP endpoint for traces (e.g. `http://openobserve:5080/api/default/v1/traces`). If unset, spans are not exported. |
 | `OTEL_EXPORTER_OTLP_HEADERS`  | No | Optional headers: comma-separated `key=value` (e.g. `Authorization=Basic <base64>,stream-name=default` for OpenObserve). |

@@ -8,7 +8,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    API_KEY: str = "Your API key here"
+    # Required: fail fast at startup when unset instead of serving a default key.
+    API_KEY: str
     REDIS_URL: str = "redis://localhost:6379/0"
     # Whisper model: size name (e.g. "base", "small") or path to local dir (e.g. "whisper-model", "./whisper-model")
     WHISPER_MODEL: str = "base"
@@ -16,6 +17,14 @@ class Settings(BaseSettings):
     WHISPER_DOWNLOAD_ROOT: str | None = None
     # CTranslate2 compute type: "int8", "float16", "float32", or "auto" (default)
     WHISPER_COMPUTE_TYPE: str = "auto"
+    # Skip non-speech segments in Whisper (reduces hallucinations on silence/music)
+    WHISPER_VAD_FILTER: bool = True
+    # Batched inference: faster on CPU but uses more peak memory
+    WHISPER_BATCHED: bool = False
+    # Subtitle languages for yt-dlp --sub-langs (regex, comma-separated; "all" for any)
+    SUBTITLE_LANGS: str = "en"
+    # Cache successful transcripts by video id (seconds); 0 disables
+    TRANSCRIPT_CACHE_TTL: int = 604800
     # Observability
     ENV: str | None = None
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None

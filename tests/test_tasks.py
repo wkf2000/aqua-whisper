@@ -1,10 +1,9 @@
-"""Tests for Celery task: run_transcript_pipeline and webhook POST."""
+"""Tests for Celery task: run_transcript_pipeline, webhook POST, and caching."""
 
 from unittest.mock import MagicMock, patch
 
-
 from app.pipeline import NoSubtitlesError
-from app.tasks import run_transcript_pipeline
+from app.tasks import _transcript_with_cache, run_transcript_pipeline
 
 
 def test_task_posts_success_payload_when_get_transcript_returns() -> None:
@@ -93,3 +92,57 @@ def test_task_posts_failed_payload_on_any_exception() -> None:
     assert call_kwargs[1]["json"]["status"] == "failed"
     assert call_kwargs[1]["json"]["error"] == error_message
     assert call_kwargs[1]["json"]["author"] == "unknown"
+
+
+def test_cached_transcript_skips_pipeline() -> None:
+    """When a transcript is cached for the video id, the pipeline is not run."""
+    with (
+        patch("app.tasks.extract_video_id", return_value="abc123def45"),
+        patch("app.tasks.get_cached_transcript", return_value=("manual", "cached text")),
+        patch("app.tasks.get_transcript") as mock_get,
+        patch("app.tasks.cache_transcript") as mock_set,
+    ):
+        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+    assert result == ("manual", "cached text")
+    mock_get.assert_not_called()
+    mock_set.assert_not_called()
+
+
+def test_uncached_transcript_runs_pipeline_and_caches() -> None:
+    """When nothing is cached, the pipeline runs and its result is stored."""
+    with (
+        patch("app.tasks.extract_video_id", return_value="abc123def45"),
+        patch("app.tasks.get_cached_transcript", return_value=None),
+        patch("app.tasks.get_transcript", return_value=("auto", "fresh text")),
+        patch("app.tasks.cache_transcript") as mock_set,
+    ):
+        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+    assert result == ("auto", "fresh text")
+    mock_set.assert_called_once_with("abc123def45", "auto", "fresh text")
+
+
+def test_caching_disabled_when_ttl_zero() -> None:
+    """TRANSCRIPT_CACHE_TTL=0 disables both cache reads and writes."""
+    with (
+        patch("app.tasks.extract_video_id", return_value="abc123def45"),
+        patch("app.tasks.settings.TRANSCRIPT_CACHE_TTL", 0),
+        patch("app.tasks.get_cached_transcript") as mock_get,
+        patch("app.tasks.get_transcript", return_value=("whisper", "fresh text")),
+        patch("app.tasks.cache_transcript") as mock_set,
+    ):
+        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+    assert result == ("whisper", "fresh text")
+    mock_get.assert_not_called()
+    mock_set.assert_not_called()
+
+
+def test_cache_read_failure_still_runs_pipeline() -> None:
+    """A Redis error on cache read falls through to running the pipeline."""
+    with (
+        patch("app.tasks.extract_video_id", return_value="abc123def45"),
+        patch("app.tasks.get_cached_transcript", side_effect=RuntimeError("redis down")),
+        patch("app.tasks.get_transcript", return_value=("auto", "text")),
+        patch("app.tasks.cache_transcript"),
+    ):
+        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+    assert result == ("auto", "text")

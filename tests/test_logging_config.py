@@ -13,4 +13,3 @@ def test_setup_logging_configures_structlog() -> None:
     # This should not raise and should return None (structlog logging API).
     result = logger.info("test_event", foo="bar")
     assert result is None
-

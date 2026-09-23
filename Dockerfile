@@ -3,29 +3,34 @@
 # API (default):  docker run -p 8000:8000 <image>
 # Worker:         docker run <image> celery -A app.celery_app worker --loglevel=info --concurrency=1
 #
-# Image includes: FastAPI app, Celery worker code, yt-dlp, FFmpeg, faster-whisper (Python deps from pyproject.toml).
+# Image includes: FastAPI app, Celery worker code, ffmpeg, and locked Python
+# deps (yt-dlp, faster-whisper, etc.) installed from uv.lock via uv.
 
 FROM python:3.13-slim
+
+# uv: installs project dependencies from uv.lock (reproducible builds)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # System deps: ffmpeg for yt-dlp and audio handling
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# yt-dlp for YouTube download
-RUN pip install --no-cache-dir yt-dlp
-
 WORKDIR /app
 
-# Copy project and install Python deps (includes faster-whisper, FastAPI, Celery, etc.)
-COPY pyproject.toml ./
-COPY README.md ./
+# Install dependencies first (layer cached as long as uv.lock is unchanged).
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy the application and install the project itself.
 COPY app ./app
 COPY static ./static
+RUN uv sync --frozen --no-dev
 
-RUN pip install --no-cache-dir .
+# Expose the venv binaries (uvicorn, celery, yt-dlp) on PATH.
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
 
-# Default: run the API. Override with celery worker command to run the worker.
+# Default: run the API. Override with the celery worker command to run the worker.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+whisper-model
+tests
+docs
+.env
+.DS_Store
