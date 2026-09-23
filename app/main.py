@@ -4,13 +4,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.auth import require_api_key
 from app.config import settings
+from app.db import get_stored_transcript, list_transcripts
 from app.logging_config import setup_logging
 from app.schemas import TranscriptRequest, UITranscriptRequest
 from app.store import get_task_result
@@ -85,6 +86,12 @@ def ui_index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@app.get("/history")
+def ui_history_page() -> FileResponse:
+    """Serve the saved-transcript history page."""
+    return FileResponse(_STATIC_DIR / "history.html")
+
+
 @app.post("/ui/transcript", status_code=202)
 def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
     """Accept a YouTube URL, enqueue transcript task, return task_id."""
@@ -102,3 +109,52 @@ def ui_transcript_status(task_id: str) -> dict:
     if result is None:
         return {"status": "pending"}
     return result
+
+
+@app.get("/ui/history")
+def ui_history(
+    q: str | None = Query(default=None, max_length=200),
+    source: str | None = Query(default=None, pattern="^(manual|auto|whisper)$"),
+    sort: str = Query(default="newest", pattern="^(newest|oldest|longest|shortest|title)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1_000_000_000),
+) -> dict:
+    """List saved transcripts with search, source, sort, and pagination filters."""
+    rows, total = list_transcripts(q=q, source=source, sort=sort, limit=limit, offset=offset)
+    return {
+        "items": [
+            {
+                "video_id": row.video_id,
+                "source": row.source,
+                "title": row.title,
+                "channel": row.channel,
+                "duration": row.duration,
+                "upload_date": row.upload_date,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/ui/history/{video_id}")
+def ui_history_detail(video_id: str) -> dict:
+    """Return one saved transcript with its metadata and full text."""
+    row = get_stored_transcript(video_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    return {
+        "video_id": row.video_id,
+        "source": row.source,
+        "title": row.title,
+        "channel": row.channel,
+        "duration": row.duration,
+        "upload_date": row.upload_date,
+        "transcript": row.transcript,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }

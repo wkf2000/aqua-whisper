@@ -88,13 +88,16 @@ After changing `docker-compose.yaml` in this repo, copy it to the server as `doc
 
 ## Web UI
 
-The repository also ships a small frontend (`static/index.html`) served by the API:
+The repository also ships a small frontend (`static/index.html` for transcription, `static/history.html` for browsing saved transcripts) served by the API:
 
 | Endpoint                | Auth | Description |
 |-------------------------|------|-------------|
-| `GET /`                 | No   | Single-page frontend. |
+| `GET /`                 | No   | Transcription frontend. |
+| `GET /history`          | No   | History page: saved transcripts with search, source/sort filters, and expandable rows. |
 | `POST /ui/transcript`   | No   | Body: `video_url` (YouTube only). Returns 202 + `task_id`. |
 | `GET /ui/transcript/{task_id}` | No | Polls the stored result: `pending`, or `success`/`failed` with `source` and `transcript`. |
+| `GET /ui/history`       | No   | Lists saved transcripts (metadata only, no transcript text). Query params: `q` (search title/channel/video id), `source` (`manual` \| `auto` \| `whisper`), `sort` (`newest` \| `oldest` \| `longest` \| `shortest` \| `title`), `limit` (1&ndash;200), `offset`. Returns `{items, total, limit, offset}`. |
+| `GET /ui/history/{video_id}` | No | One saved transcript with its metadata and full text. |
 
 These endpoints carry no API key by design. In production the frontend is served behind **Cloudflare**, which provides rate limiting and bot protection; the API (`/transcript`, `/protected`) is additionally protected by the shared API key.
 

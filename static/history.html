@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aqua Whisper &mdash; History</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            surface: '#1E293B',
+            bg: '#0F172A',
+            accent: '#22C55E',
+            muted: '#94A3B8',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 24px; height: 24px;
+      border: 3px solid #334155;
+      border-top-color: #22C55E;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation-duration: 2s; }
+    }
+  </style>
+</head>
+<body class="bg-bg text-slate-50 font-sans min-h-screen px-4 sm:px-6 lg:px-8 py-10">
+
+  <main class="w-full max-w-4xl mx-auto">
+    <div class="mb-8">
+      <div class="flex items-baseline justify-between gap-4">
+        <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight">History</h1>
+        <a href="/" class="text-sm text-muted hover:text-accent transition-colors duration-200">&larr; New transcription</a>
+      </div>
+      <p class="mt-2 text-muted text-sm sm:text-base">Saved transcripts and their video metadata</p>
+    </div>
+
+    <div class="flex flex-col sm:flex-row gap-3">
+      <input
+        id="search"
+        type="search"
+        maxlength="200"
+        placeholder="Search title, channel, or video id&hellip;"
+        class="flex-1 h-10 px-3 rounded-lg bg-surface text-slate-50 placeholder-muted border border-slate-700 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors duration-200"
+      />
+      <select
+        id="source"
+        class="h-10 px-3 rounded-lg bg-surface text-slate-50 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors duration-200"
+      >
+        <option value="">All sources</option>
+        <option value="manual">manual</option>
+        <option value="auto">auto</option>
+        <option value="whisper">whisper</option>
+      </select>
+      <select
+        id="sort"
+        class="h-10 px-3 rounded-lg bg-surface text-slate-50 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent transition-colors duration-200"
+      >
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="longest">Longest first</option>
+        <option value="shortest">Shortest first</option>
+        <option value="title">Title A&ndash;Z</option>
+      </select>
+    </div>
+
+    <div id="status" class="mt-6 flex items-center gap-3">
+      <div class="spinner"></div>
+      <span class="text-muted text-sm">Loading transcripts&hellip;</span>
+    </div>
+
+    <div id="error" class="mt-6 hidden">
+      <p class="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-3"></p>
+    </div>
+
+    <p id="empty" class="mt-6 text-muted text-sm hidden"></p>
+
+    <div id="list" class="mt-6 hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-muted uppercase tracking-wide">
+              <th class="font-medium py-2 pr-4">Video</th>
+              <th class="font-medium py-2 pr-4">Source</th>
+              <th class="font-medium py-2 pr-4">Duration</th>
+              <th class="font-medium py-2 pr-4">Uploaded</th>
+              <th class="font-medium py-2">Saved</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="pager" class="mt-4 flex items-center justify-between hidden">
+      <span id="range" class="text-xs text-muted"></span>
+      <div class="flex gap-2">
+        <button
+          id="prev"
+          type="button"
+          class="h-9 px-3 rounded-lg bg-surface border border-slate-700 text-muted text-sm hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >Previous</button>
+        <button
+          id="next"
+          type="button"
+          class="h-9 px-3 rounded-lg bg-surface border border-slate-700 text-muted text-sm hover:text-slate-50 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >Next</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const PAGE_SIZE = 50;
+
+    const $search = document.getElementById('search');
+    const $source = document.getElementById('source');
+    const $sort   = document.getElementById('sort');
+    const $status = document.getElementById('status');
+    const $error  = document.getElementById('error');
+    const $empty  = document.getElementById('empty');
+    const $list   = document.getElementById('list');
+    const $rows   = document.getElementById('rows');
+    const $pager  = document.getElementById('pager');
+    const $range  = document.getElementById('range');
+    const $prev   = document.getElementById('prev');
+    const $next   = document.getElementById('next');
+
+    function show(el) { el.classList.remove('hidden'); }
+    function hide(el) { el.classList.add('hidden'); }
+
+    function setError(msg) {
+      $error.querySelector('p').textContent = msg;
+      show($error);
+    }
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[ch]));
+    }
+
+    function fmtDuration(seconds) {
+      if (seconds == null) return '\u2014';
+      const s = Math.round(seconds);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      const mm = String(m).padStart(2, '0');
+      const ss = String(sec).padStart(2, '0');
+      return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+    }
+
+    let offset = 0;
+    let total = 0;
+    let requestSeq = 0;  // guards against stale responses overwriting newer ones
+    const transcripts = new Map();  // video_id -> transcript text
+    let searchTimer = null;
+
+    function hasFilters() {
+      return Boolean($search.value.trim()) || $source.value;
+    }
+
+    async function loadHistory() {
+      const seq = ++requestSeq;
+      hide($error); hide($empty); hide($list); hide($pager);
+      show($status);
+
+      const params = new URLSearchParams();
+      const q = $search.value.trim();
+      if (q) params.set('q', q);
+      if ($source.value) params.set('source', $source.value);
+      params.set('sort', $sort.value);
+      params.set('limit', PAGE_SIZE);
+      params.set('offset', offset);
+
+      try {
+        const res = await fetch(`/ui/history?${params}`);
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        const data = await res.json();
+        if (seq !== requestSeq) return;  // a newer request superseded this one
+        total = data.total;
+        render(data.items);
+      } catch (err) {
+        if (seq !== requestSeq) return;  // a newer request owns the UI now
+        hide($status);
+        setError(err.message);
+      }
+    }
+
+    function render(items) {
+      hide($status);
+      $rows.innerHTML = '';
+
+      if (total === 0) {
+        $empty.textContent = hasFilters()
+          ? 'No transcripts match these filters.'
+          : 'No saved transcripts yet \u2014 transcribe a video first.';
+        show($empty);
+        return;
+      }
+
+      for (const item of items) {
+        $rows.insertAdjacentHTML('beforeend', rowHtml(item));
+      }
+      show($list);
+
+      if (total > PAGE_SIZE) {
+        const end = Math.min(offset + PAGE_SIZE, total);
+        $range.textContent = `${offset + 1}\u2013${end} of ${total}`;
+        $prev.disabled = offset === 0;
+        $next.disabled = offset + PAGE_SIZE >= total;
+        show($pager);
+      }
+    }
+
+    function rowHtml(item) {
+      const title = item.title
+        ? escapeHtml(item.title)
+        : `<span class="text-muted">${escapeHtml(item.video_id)}</span>`;
+      const channel = item.channel
+        ? `<div class="text-xs text-muted mt-0.5">${escapeHtml(item.channel)}</div>`
+        : '';
+      return `
+        <tr class="border-t border-slate-700 cursor-pointer hover:bg-surface/60 transition-colors duration-150" data-vid="${escapeHtml(item.video_id)}">
+          <td class="py-2.5 pr-4 align-top">
+            <div class="font-medium">${title}</div>
+            ${channel}
+          </td>
+          <td class="py-2.5 pr-4 align-top"><span class="text-xs text-muted bg-surface px-2 py-0.5 rounded">${escapeHtml(item.source)}</span></td>
+          <td class="py-2.5 pr-4 align-top text-muted whitespace-nowrap">${escapeHtml(fmtDuration(item.duration))}</td>
+          <td class="py-2.5 pr-4 align-top text-muted whitespace-nowrap">${escapeHtml(item.upload_date || '\u2014')}</td>
+          <td class="py-2.5 align-top text-muted whitespace-nowrap">${escapeHtml(item.created_at ? item.created_at.slice(0, 10) : '')}</td>
+        </tr>
+        <tr class="hidden" data-detail="${escapeHtml(item.video_id)}">
+          <td colspan="5" class="pb-4">
+            <div class="flex items-center gap-2">
+              <div class="spinner" style="width:16px;height:16px;border-width:2px;"></div>
+              <span class="text-muted text-xs">Loading transcript&hellip;</span>
+            </div>
+          </td>
+        </tr>`;
+    }
+
+    async function toggleDetail(videoId) {
+      const detailRow = $rows.querySelector(`[data-detail="${CSS.escape(videoId)}"]`);
+      if (!detailRow) return;
+
+      if (!detailRow.classList.contains('hidden')) {
+        detailRow.classList.add('hidden');
+        return;
+      }
+      detailRow.classList.remove('hidden');
+
+      if (transcripts.has(videoId)) {
+        fillDetail(detailRow, transcripts.get(videoId));
+        return;
+      }
+      try {
+        const res = await fetch(`/ui/history/${encodeURIComponent(videoId)}`);
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        const data = await res.json();
+        transcripts.set(videoId, data.transcript);
+        fillDetail(detailRow, data.transcript);
+      } catch {
+        fillDetail(detailRow, 'Failed to load transcript.');
+      }
+    }
+
+    function fillDetail(detailRow, text) {
+      detailRow.querySelector('td').innerHTML = `
+        <pre class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700">${escapeHtml(text)}</pre>`;
+    }
+
+    $rows.addEventListener('click', (e) => {
+      const row = e.target.closest('tr[data-vid]');
+      if (row) toggleDetail(row.dataset.vid);
+    });
+
+    $search.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { offset = 0; loadHistory(); }, 300);
+    });
+    $source.addEventListener('change', () => { offset = 0; loadHistory(); });
+    $sort.addEventListener('change', () => { offset = 0; loadHistory(); });
+    $prev.addEventListener('click', () => { offset = Math.max(0, offset - PAGE_SIZE); loadHistory(); });
+    $next.addEventListener('click', () => { offset += PAGE_SIZE; loadHistory(); });
+
+    loadHistory();
+  </script>
+
+</body>
+</html>

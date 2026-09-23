@@ -123,3 +123,72 @@ def get_stored_transcript(video_id: str) -> StoredTranscript | None:
     if row is None:
         return None
     return StoredTranscript(*row)
+
+
+class StoredSummary(NamedTuple):
+    """A transcript row without the transcript text (for listings)."""
+
+    video_id: str
+    source: str
+    title: str | None
+    channel: str | None
+    duration: float | None
+    upload_date: str | None
+    created_at: str
+    updated_at: str
+
+
+# Whitelisted ORDER BY fragments (never interpolated from user input directly).
+_LIST_SORTS = {
+    "newest": "created_at DESC",
+    "oldest": "created_at ASC",
+    "longest": "duration IS NULL ASC, duration DESC",
+    "shortest": "duration IS NULL ASC, duration ASC",
+    "title": "title IS NULL ASC, title COLLATE NOCASE ASC, created_at DESC",
+}
+
+
+def _escape_like(text: str) -> str:
+    """Escape SQL LIKE wildcards so user input matches literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def list_transcripts(
+    q: str | None = None,
+    source: str | None = None,
+    sort: str = "newest",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[StoredSummary], int]:
+    """Return (rows, total) matching the filters; rows omit the transcript text.
+
+    q case-insensitively matches title, channel, or video id; sort is a
+    whitelisted key (unknown values fall back to newest).
+    """
+    where: list[str] = []
+    params: list[object] = []
+    if q:
+        pattern = f"%{_escape_like(q)}%"
+        where.append(
+            "(title LIKE ? ESCAPE '\\' OR channel LIKE ? ESCAPE '\\'"
+            " OR video_id LIKE ? ESCAPE '\\')"
+        )
+        params.extend([pattern, pattern, pattern])
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    order_sql = _LIST_SORTS.get(sort, _LIST_SORTS["newest"])
+    with closing(_connect()) as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM transcripts {where_sql}", params).fetchone()[0]
+        rows = conn.execute(
+            f"""
+            SELECT video_id, source, title, channel, duration, upload_date,
+                   created_at, updated_at
+            FROM transcripts {where_sql}
+            ORDER BY {order_sql}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return [StoredSummary(*row) for row in rows], total
