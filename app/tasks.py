@@ -34,10 +34,18 @@ def _transcript_with_cache(video_url: str) -> tuple[str, str]:
             )
             return stored
         logger.info("transcript_store.miss", video_url=video_url, video_id=video_id)
-    source, transcript = get_transcript(video_url)
+    source, transcript, metadata = get_transcript(video_url)
     if video_id:
         try:
-            save_transcript(video_id, source, transcript)
+            save_transcript(
+                video_id,
+                source,
+                transcript,
+                title=metadata.title,
+                channel=metadata.channel,
+                duration=metadata.duration,
+                upload_date=metadata.upload_date,
+            )
         except Exception:
             logger.warning("transcript_store.write_failed", video_url=video_url, video_id=video_id)
     return source, transcript

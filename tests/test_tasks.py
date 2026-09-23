@@ -2,8 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.pipeline import NoSubtitlesError
+from app.pipeline import NoSubtitlesError, VideoMetadata
 from app.tasks import _transcript_with_cache, run_transcript_pipeline
+
+_META = VideoMetadata(
+    title="Test Title", channel="Test Channel", duration=300.0, upload_date="2026-01-01"
+)
 
 
 def test_task_posts_success_payload_when_get_transcript_returns() -> None:
@@ -19,7 +23,7 @@ def test_task_posts_success_payload_when_get_transcript_returns() -> None:
     mock_client.post = mock_post
 
     with (
-        patch("app.tasks.get_transcript", return_value=(source, transcript)),
+        patch("app.tasks.get_transcript", return_value=(source, transcript, _META)),
         patch("app.tasks.httpx.Client") as mock_client_cls,
     ):
         mock_client_cls.return_value.__enter__.return_value = mock_client
@@ -109,16 +113,24 @@ def test_stored_transcript_skips_pipeline() -> None:
 
 
 def test_unstored_transcript_runs_pipeline_and_saves() -> None:
-    """When nothing fresh is stored, the pipeline runs and its result is saved."""
+    """When nothing fresh is stored, the pipeline runs and its result is saved with metadata."""
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
         patch("app.tasks.get_fresh_transcript", return_value=None),
-        patch("app.tasks.get_transcript", return_value=("auto", "fresh text")),
+        patch("app.tasks.get_transcript", return_value=("auto", "fresh text", _META)),
         patch("app.tasks.save_transcript") as mock_set,
     ):
         result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
     assert result == ("auto", "fresh text")
-    mock_set.assert_called_once_with("abc123def45", "auto", "fresh text")
+    mock_set.assert_called_once_with(
+        "abc123def45",
+        "auto",
+        "fresh text",
+        title=_META.title,
+        channel=_META.channel,
+        duration=_META.duration,
+        upload_date=_META.upload_date,
+    )
 
 
 def test_reuse_disabled_when_ttl_zero() -> None:
@@ -127,13 +139,21 @@ def test_reuse_disabled_when_ttl_zero() -> None:
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
         patch("app.tasks.settings.TRANSCRIPT_CACHE_TTL", 0),
         patch("app.tasks.get_fresh_transcript") as mock_get,
-        patch("app.tasks.get_transcript", return_value=("whisper", "fresh text")),
+        patch("app.tasks.get_transcript", return_value=("whisper", "fresh text", _META)),
         patch("app.tasks.save_transcript") as mock_set,
     ):
         result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
     assert result == ("whisper", "fresh text")
     mock_get.assert_not_called()
-    mock_set.assert_called_once_with("abc123def45", "whisper", "fresh text")
+    mock_set.assert_called_once_with(
+        "abc123def45",
+        "whisper",
+        "fresh text",
+        title=_META.title,
+        channel=_META.channel,
+        duration=_META.duration,
+        upload_date=_META.upload_date,
+    )
 
 
 def test_store_read_failure_still_runs_pipeline() -> None:
@@ -141,7 +161,7 @@ def test_store_read_failure_still_runs_pipeline() -> None:
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
         patch("app.tasks.get_fresh_transcript", side_effect=RuntimeError("sqlite down")),
-        patch("app.tasks.get_transcript", return_value=("auto", "text")),
+        patch("app.tasks.get_transcript", return_value=("auto", "text", _META)),
         patch("app.tasks.save_transcript"),
     ):
         result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")

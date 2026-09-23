@@ -28,9 +28,20 @@ def _is_info_call(cmd: list) -> bool:
     return "--dump-single-json" in cmd
 
 
-def _info(duration: object = 300, live_status: object = "not_live") -> MagicMock:
+def _info(
+    duration: object = 300,
+    live_status: object = "not_live",
+    title: object = None,
+    channel: object = None,
+    upload_date: object = None,
+) -> MagicMock:
     """Mocked yt-dlp metadata JSON for the precheck call."""
-    payload: dict = {"duration": duration}
+    payload: dict = {
+        "duration": duration,
+        "title": title,
+        "channel": channel,
+        "upload_date": upload_date,
+    }
     if live_status is not None:
         payload["live_status"] = live_status
     return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
@@ -58,7 +69,7 @@ def test_manual_subtitle_returns_manual_and_plain_text(tmp_path: Path) -> None:
         patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
         patch("app.pipeline.subprocess.run", side_effect=run_effect),
     ):
-        source, content = get_transcript("https://www.youtube.com/watch?v=abc")
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=abc")
     assert source == "manual"
     assert content == "manual line"
     assert "WEBVTT" not in content
@@ -108,7 +119,7 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
         patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
         patch("app.pipeline.subprocess.run", side_effect=run_effect),
     ):
-        source, content = get_transcript("https://www.youtube.com/watch?v=xyz")
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=xyz")
     assert source == "auto"
     assert content == "auto line"
 
@@ -133,7 +144,7 @@ def test_duplicate_caption_lines_collapsed(tmp_path: Path) -> None:
         patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
         patch("app.pipeline.subprocess.run", side_effect=run_effect),
     ):
-        _source, content = get_transcript("https://www.youtube.com/watch?v=dup")
+        _source, content, _meta = get_transcript("https://www.youtube.com/watch?v=dup")
     assert content == "rolling caption"
 
 
@@ -166,7 +177,7 @@ def test_whisper_fallback_when_no_manual_or_auto_returns_whisper_plain_text(
         patch("app.whisper.WhisperModel") as mock_model_cls,
     ):
         mock_model_cls.return_value.transcribe.return_value = (mock_segments, None)
-        source, content = get_transcript("https://www.youtube.com/watch?v=abc")
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=abc")
 
     assert source == "whisper"
     assert content == "whisper fallback line"
@@ -210,7 +221,7 @@ def test_was_live_video_is_transcribed(tmp_path: Path) -> None:
         patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
         patch("app.pipeline.subprocess.run", side_effect=run_effect),
     ):
-        source, content = get_transcript("https://www.youtube.com/watch?v=past")
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=past")
     assert source == "manual"
     assert content == "past stream line"
 
@@ -251,3 +262,49 @@ def test_ytdlp_failure_raises_clear_error(tmp_path: Path) -> None:
     ):
         with pytest.raises(RuntimeError, match="exit code 2"):
             get_transcript("https://www.youtube.com/watch?v=abc")
+
+
+def test_metadata_extracted_from_probe_info(tmp_path: Path) -> None:
+    """Video metadata from the probe is returned, with upload_date normalized to ISO."""
+    vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nmeta line"
+
+    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(title="A Talk", channel="Some Channel", upload_date="20260101")
+        if "--write-sub" in cmd:
+            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        _source, _content, meta = get_transcript("https://www.youtube.com/watch?v=meta")
+
+    assert meta.title == "A Talk"
+    assert meta.channel == "Some Channel"
+    assert meta.duration == 300
+    assert meta.upload_date == "2026-01-01"
+
+
+def test_metadata_falls_back_to_uploader_when_channel_missing(tmp_path: Path) -> None:
+    """When yt-dlp has no channel field, the uploader is used; absent fields are None."""
+    info = {"duration": 300, "live_status": "not_live", "uploader": "Uploader Name"}
+    vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nline"
+
+    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return MagicMock(returncode=0, stdout=json.dumps(info).encode())
+        if "--write-sub" in cmd:
+            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        _source, _content, meta = get_transcript("https://www.youtube.com/watch?v=upl")
+
+    assert meta.channel == "Uploader Name"
+    assert meta.title is None
+    assert meta.upload_date is None

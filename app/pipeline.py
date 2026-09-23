@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import NamedTuple
 
 import structlog
 from faster_whisper import BatchedInferencePipeline
@@ -56,6 +57,32 @@ class VideoTooShortError(Exception):
 
 class UnsupportedLiveStatusError(Exception):
     """Raised when the video's live broadcast status is not in ALLOWED_LIVE_STATUSES."""
+
+
+class VideoMetadata(NamedTuple):
+    """Browsable video metadata from the yt-dlp probe; missing fields are None."""
+
+    title: str | None
+    channel: str | None
+    duration: float | None
+    upload_date: str | None
+
+
+def _extract_metadata(info: dict) -> VideoMetadata:
+    """Pull browsable metadata from the yt-dlp info dict.
+
+    yt-dlp reports upload_date as YYYYMMDD; it is normalized to ISO YYYY-MM-DD.
+    The channel name falls back to the uploader when the channel field is absent.
+    """
+    upload_date = info.get("upload_date")
+    if isinstance(upload_date, str) and len(upload_date) == 8 and upload_date.isdigit():
+        upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
+    return VideoMetadata(
+        title=info.get("title"),
+        channel=info.get("channel") or info.get("uploader"),
+        duration=info.get("duration"),
+        upload_date=upload_date,
+    )
 
 
 def _run(cmd: list[str], timeout: int) -> None:
@@ -149,12 +176,13 @@ def _check_duration(info: dict) -> None:
         )
 
 
-def get_transcript(video_url: str) -> tuple[str, str]:
-    """Return (source, plain_text). Raises NoSubtitlesError if no transcript available."""
+def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
+    """Return (source, plain_text, metadata). Raises NoSubtitlesError if no transcript."""
     logger.info("get_transcript.start", video_url=video_url)
     info = _probe_video(video_url)
     _check_live_status(info, video_url)
     _check_duration(info)
+    metadata = _extract_metadata(info)
     temp_dir = mkdtemp()
     try:
         out_base = str(Path(temp_dir) / "subs")
@@ -179,7 +207,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         vtt_files = list(Path(temp_dir).glob("*.vtt"))
         if vtt_files:
             logger.info("get_transcript.manual_subtitles_found", video_url=video_url)
-            return ("manual", _vtt_to_plain_text(vtt_files[0].read_text()))
+            return ("manual", _vtt_to_plain_text(vtt_files[0].read_text()), metadata)
 
         # Try auto-generated subtitles.
         logger.info("get_transcript.try_auto_subtitles", video_url=video_url)
@@ -201,7 +229,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
         vtt_files = list(Path(temp_dir).glob("*.vtt"))
         if vtt_files:
             logger.info("get_transcript.auto_subtitles_found", video_url=video_url)
-            return ("auto", _vtt_to_plain_text(vtt_files[0].read_text()))
+            return ("auto", _vtt_to_plain_text(vtt_files[0].read_text()), metadata)
 
         # Whisper fallback: download audio-only with yt-dlp, transcribe with faster-whisper.
         logger.info("get_transcript.whisper_fallback_start", video_url=video_url)
@@ -237,7 +265,7 @@ def get_transcript(video_url: str) -> tuple[str, str]:
             segments, _ = model.transcribe(audio_path, vad_filter=settings.WHISPER_VAD_FILTER)
         transcript = "\n".join(_plain_lines(segments)).strip()
         logger.info("get_transcript.whisper_fallback_success", video_url=video_url)
-        return ("whisper", transcript)
+        return ("whisper", transcript, metadata)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.info("get_transcript.cleanup_complete", video_url=video_url)

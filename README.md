@@ -5,7 +5,7 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Features
 
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
-- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store (reused while no older than `TRANSCRIPT_CACHE_TTL`).
+- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store with their title, channel, duration, and upload date (reused while no older than `TRANSCRIPT_CACHE_TTL`).
 - **Web UI** — Unauthenticated single-page frontend at `/` with `/ui/transcript` submission and polling endpoints. In production it sits behind Cloudflare, which handles rate limiting and bot protection; the API endpoints remain API-key protected.
 - **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.

@@ -1,15 +1,17 @@
 """SQLite-backed durable storage for generated transcripts.
 
-Every completed transcript is stored by video id and kept forever.
-TRANSCRIPT_CACHE_TTL does not delete rows; it only limits how old a stored
-transcript may be before the pipeline re-runs and refreshes it (see
-app.tasks._transcript_with_cache).
+Every completed transcript is stored by video id and kept forever, along with
+the video metadata available at transcription time (title, channel, duration,
+upload date). TRANSCRIPT_CACHE_TTL does not delete rows; it only limits how
+old a stored transcript may be before the pipeline re-runs and refreshes it
+(see app.tasks._transcript_with_cache).
 """
 
 import os
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from app.config import settings
 
@@ -21,17 +23,44 @@ CREATE TABLE IF NOT EXISTS transcripts (
     video_id   TEXT PRIMARY KEY,
     source     TEXT NOT NULL,
     transcript TEXT NOT NULL,
+    title      TEXT,
+    channel    TEXT,
+    duration   REAL,
+    upload_date TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
 
+# Columns added after the first release; applied to databases that predate them.
+_MIGRATIONS = (
+    ("title", "ALTER TABLE transcripts ADD COLUMN title TEXT"),
+    ("channel", "ALTER TABLE transcripts ADD COLUMN channel TEXT"),
+    ("duration", "ALTER TABLE transcripts ADD COLUMN duration REAL"),
+    ("upload_date", "ALTER TABLE transcripts ADD COLUMN upload_date TEXT"),
+)
+
+
+class StoredTranscript(NamedTuple):
+    """A stored transcript row; video metadata is None for older rows."""
+
+    video_id: str
+    source: str
+    transcript: str
+    title: str | None
+    channel: str | None
+    duration: float | None
+    upload_date: str | None
+    created_at: str
+    updated_at: str
+
 
 def _connect() -> sqlite3.Connection:
     """Open a connection to the transcript store.
 
-    WAL keeps readers and the writer from blocking each other, and the schema
-    statement self-initializes the database file (a no-op once it exists).
+    WAL keeps readers and the writer from blocking each other, the schema
+    statement self-initializes the database file, and _migrate upgrades
+    databases created by older versions of the app.
     """
     path = settings.TRANSCRIPT_DB_PATH
     parent = os.path.dirname(path)
@@ -40,45 +69,71 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(_SCHEMA)
+    _migrate(conn)
     return conn
 
 
-def save_transcript(video_id: str, source: str, transcript: str) -> None:
-    """Store the transcript for a video id, refreshing the row if it already exists."""
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns missing from databases created by older versions."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(transcripts)")}
+    for column, ddl in _MIGRATIONS:
+        if column not in existing:
+            conn.execute(ddl)
+
+
+def save_transcript(
+    video_id: str,
+    source: str,
+    transcript: str,
+    *,
+    title: str | None = None,
+    channel: str | None = None,
+    duration: float | None = None,
+    upload_date: str | None = None,
+) -> None:
+    """Store the transcript and video metadata, refreshing the row if it exists."""
     with closing(_connect()) as conn, conn:
         conn.execute(
             """
-            INSERT INTO transcripts (video_id, source, transcript)
-            VALUES (?, ?, ?)
+            INSERT INTO transcripts
+                (video_id, source, transcript, title, channel, duration, upload_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
                 source = excluded.source,
                 transcript = excluded.transcript,
+                title = excluded.title,
+                channel = excluded.channel,
+                duration = excluded.duration,
+                upload_date = excluded.upload_date,
                 updated_at = datetime('now')
             """,
-            (video_id, source, transcript),
+            (video_id, source, transcript, title, channel, duration, upload_date),
         )
 
 
-def get_stored_transcript(video_id: str) -> tuple[str, str, str] | None:
-    """Return (source, transcript, updated_at) for a video id, or None if not stored."""
+def get_stored_transcript(video_id: str) -> StoredTranscript | None:
+    """Return the stored row for a video id, or None if not stored."""
     with closing(_connect()) as conn:
         row = conn.execute(
-            "SELECT source, transcript, updated_at FROM transcripts WHERE video_id = ?",
+            """
+            SELECT video_id, source, transcript, title, channel, duration, upload_date,
+                   created_at, updated_at
+            FROM transcripts WHERE video_id = ?
+            """,
             (video_id,),
         ).fetchone()
     if row is None:
         return None
-    return row[0], row[1], row[2]
+    return StoredTranscript(*row)
 
 
 def get_fresh_transcript(video_id: str, max_age_seconds: int) -> tuple[str, str] | None:
     """Return (source, transcript) only when stored and no older than max_age_seconds."""
-    row = get_stored_transcript(video_id)
-    if row is None:
+    stored = get_stored_transcript(video_id)
+    if stored is None:
         return None
-    source, transcript, updated_at = row
-    updated = datetime.strptime(updated_at, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
+    updated = datetime.strptime(stored.updated_at, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     if now - updated >= timedelta(seconds=max_age_seconds):
         return None
-    return source, transcript
+    return stored.source, stored.transcript
