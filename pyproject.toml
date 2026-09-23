@@ -17,6 +17,7 @@ dependencies = [
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
+    "yt-dlp-ejs>=0.8.0",
 ]
 
 [project.optional-dependencies]
