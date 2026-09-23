@@ -1,47 +1,55 @@
-# aqua-whisper: API + Celery worker.
+# aqua-whisper: API + Celery worker from a single image.
 #
-# Redis is external — not included in this Compose file. You must have a Redis
-# instance running and set REDIS_URL (e.g. via .env or environment). For local
-# Docker, use redis://host.docker.internal:6379/0 or redis://<host>:6379/0.
-# The api service also requires API_KEY for HTTP request validation; set it via
-# .env or environment.
+# One file for both local development and production; the mode is chosen by
+# environment variables (Compose automatically reads a `.env` file next to
+# this file for variable substitution).
 #
-# Image: set AQUA_WHISPER_IMAGE for production (e.g. ghcr.io/owner/aqua-whisper:latest).
-# Unset = local build as aqua-whisper:latest.
+#   Local (defaults):
+#     - Image builds locally from the Dockerfile as `aqua-whisper:latest`
+#       (`docker compose up --build`).
+#     - API published on host port 8000.
+#     - Services attach to the external `aqua-whisper-backend` network
+#       (create it once: `docker network create aqua-whisper-backend`).
+#     - `./whisper-model` is bind-mounted at `/whisper-model`.
+#
+#   Production:
+#     - Set the AQUA_WHISPER_* variables (see .env.example) to pull the
+#       CI-built image from GHCR, change the host port, attach to an existing
+#       external network (e.g. 1panel-network), and bind a local Whisper
+#       model directory.
+#
+# Redis is external — not included in this Compose file. Set REDIS_URL (e.g.
+# redis://host.docker.internal:6379/0 for local Docker) in `.env` or the
+# environment. The API service also requires API_KEY.
 
 services:
   api:
-    image: ghcr.io/wkf2000/aqua-whisper:latest
+    image: ${AQUA_WHISPER_IMAGE:-aqua-whisper:latest}
+    build: .
     container_name: aqua-whisper-api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     networks:
-      - 1panel-network
+      - backend
     ports:
-      - "8509:8000"
+      - "${AQUA_WHISPER_PORT:-8000}:8000"
     env_file:
       - .env
     volumes:
-      - whisper-model:/whisper-model
+      - ${AQUA_WHISPER_MODEL_DIR:-./whisper-model}:/whisper-model
 
   worker:
-    image: ghcr.io/wkf2000/aqua-whisper:latest
+    image: ${AQUA_WHISPER_IMAGE:-aqua-whisper:latest}
+    build: .
     container_name: aqua-whisper-worker
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env
     networks:
-      - 1panel-network
+      - backend
     volumes:
-      - whisper-model:/whisper-model
-
-volumes:
-  whisper-model:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /home/michael/aqua-whisper/whisper-model/faster-whisper-base
+      - ${AQUA_WHISPER_MODEL_DIR:-./whisper-model}:/whisper-model
 
 networks:
-  1panel-network:
+  backend:
+    name: ${AQUA_WHISPER_NETWORK:-aqua-whisper-backend}
     external: true

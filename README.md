@@ -37,17 +37,40 @@ uv run celery -A app.celery_app worker --loglevel=info --concurrency=1 --pool=so
 ### Docker (API + worker)
 
 ```bash
-# Set Redis and API key (e.g. in .env)
-export REDIS_URL=redis://host.docker.internal:6379/0
-export API_KEY=your-secret-key
+# Configure: copy the example env file and edit it (set API_KEY and REDIS_URL;
+# for local Docker use redis://host.docker.internal:6379/0)
+cp .env.example .env
 
-# Build and run
+# One-time: create the external network the stack attaches to
+docker network create aqua-whisper-backend
+
+# Build and run (builds the image locally as aqua-whisper:latest)
 docker compose up --build
 ```
 
 - **API:** http://localhost:8000  
 - **Health:** `GET /health` → `{"status":"ok"}`  
 - **Docs:** http://localhost:8000/docs  
+
+With no extra configuration the Compose file builds the image locally and publishes the API on port 8000. A few `AQUA_WHISPER_*` variables (documented in `.env.example`) switch it to a server-style deployment: pull a prebuilt image, change the host port, attach to an existing external network, and bind a local Whisper model directory.
+
+## Production deployment
+
+Pushes to `main` are built and deployed automatically by CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+1. **Build** — the image is pushed to `ghcr.io/wkf2000/aqua-whisper` (tagged `latest` plus the commit sha).
+2. **Deploy** — CI SSHes into the server and, in the deploy directory, runs `docker compose -f docker-compose.yml pull`, then `down` and `up -d`.
+
+The server keeps its **own copy** of the Compose file (named `docker-compose.yml`) and a `.env`; it is not a git clone of this repo. The server's `.env` holds the production values for the same variables the local defaults stand in for:
+
+```dotenv
+AQUA_WHISPER_IMAGE=ghcr.io/wkf2000/aqua-whisper:latest
+AQUA_WHISPER_PORT=8509
+AQUA_WHISPER_NETWORK=1panel-network
+AQUA_WHISPER_MODEL_DIR=/home/michael/aqua-whisper/whisper-model/faster-whisper-base
+```
+
+After changing `docker-compose.yaml` in this repo, copy it to the server as `docker-compose.yml` and add any new variables to the server's `.env` before the next deploy — otherwise `docker compose pull` tries to pull the default local image name (`aqua-whisper:latest`) from Docker Hub and fails.
 
 ## API summary
 

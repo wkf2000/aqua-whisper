@@ -64,6 +64,8 @@ jobs:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
     steps:
       - name: Deploy to server
+        # docker-compose.yml here is the server's own copy, manually maintained
+        # in DEPLOY_PATH (the repo file is docker-compose.yaml).
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ env.DEPLOY_HOST }}
