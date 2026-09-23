@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     WHISPER_BATCHED: bool = False
     # Subtitle languages for yt-dlp --sub-langs (regex, comma-separated; "all" for any)
     SUBTITLE_LANGS: str = "en"
-    # Cache successful transcripts by video id (seconds); 0 disables
+    # Reuse a saved transcript only when no older than this (seconds); 0 disables
+    # reuse. Transcripts are always saved to the SQLite store regardless.
     TRANSCRIPT_CACHE_TTL: int = 604800
+    # SQLite file for durable transcript storage
+    TRANSCRIPT_DB_PATH: str = "./data/transcripts.db"
     # Observability
     ENV: str | None = None
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None

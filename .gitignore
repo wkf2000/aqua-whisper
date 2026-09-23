@@ -211,5 +211,6 @@ marimo/_lsp/
 __marimo__/
 
 whisper-model/
+data/
 
 .DS_Store

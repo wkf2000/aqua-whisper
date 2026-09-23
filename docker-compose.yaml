@@ -11,6 +11,9 @@
 #     - Services attach to the external `aqua-whisper-backend` network
 #       (create it once: `docker network create aqua-whisper-backend`).
 #     - `./whisper-model` is bind-mounted at `/whisper-model`.
+#     - `./data` is bind-mounted at `/data`; the worker saves generated
+#       transcripts to SQLite at /data/transcripts.db (override the host
+#       dir with AQUA_WHISPER_DATA_DIR).
 #
 #   Production:
 #     - Set the AQUA_WHISPER_* variables (see .env.example) to pull the
@@ -34,8 +37,11 @@ services:
       - "${AQUA_WHISPER_PORT:-8000}:8000"
     env_file:
       - .env
+    environment:
+      TRANSCRIPT_DB_PATH: /data/transcripts.db
     volumes:
       - ${AQUA_WHISPER_MODEL_DIR:-./whisper-model}:/whisper-model
+      - ${AQUA_WHISPER_DATA_DIR:-./data}:/data
 
   worker:
     image: ${AQUA_WHISPER_IMAGE:-aqua-whisper:latest}
@@ -44,10 +50,13 @@ services:
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1
     env_file:
       - .env
+    environment:
+      TRANSCRIPT_DB_PATH: /data/transcripts.db
     networks:
       - backend
     volumes:
       - ${AQUA_WHISPER_MODEL_DIR:-./whisper-model}:/whisper-model
+      - ${AQUA_WHISPER_DATA_DIR:-./data}:/data
 
 networks:
   backend:

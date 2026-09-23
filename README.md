@@ -5,7 +5,7 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Features
 
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
-- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and successful transcripts are cached by video id for `TRANSCRIPT_CACHE_TTL` seconds.
+- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store (reused while no older than `TRANSCRIPT_CACHE_TTL`).
 - **Web UI** — Unauthenticated single-page frontend at `/` with `/ui/transcript` submission and polling endpoints. In production it sits behind Cloudflare, which handles rate limiting and bot protection; the API endpoints remain API-key protected.
 - **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
@@ -13,6 +13,7 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Requirements
 
 - **Redis** — Existing instance; not included in Compose. Set `REDIS_URL` (e.g. `redis://host.docker.internal:6379/0` for local Docker).
+- **SQLite** — Durable transcript storage; ships with Python, no extra service. A single file at `TRANSCRIPT_DB_PATH` (default `./data/transcripts.db`).
 - **Python 3.13** — For local development.
 
 ## Quick start
@@ -52,6 +53,7 @@ docker compose up --build
 - **API:** http://localhost:8000  
 - **Health:** `GET /health` → `{"status":"ok"}`  
 - **Docs:** http://localhost:8000/docs  
+- **Transcripts:** saved durably to SQLite at `./data/transcripts.db` (bind-mounted at `/data`); override the host dir with `AQUA_WHISPER_DATA_DIR`.  
 
 With no extra configuration the Compose file builds the image locally and publishes the API on port 8000. A few `AQUA_WHISPER_*` variables (documented in `.env.example`) switch it to a server-style deployment: pull a prebuilt image, change the host port, attach to an existing external network, and bind a local Whisper model directory.
 
@@ -70,9 +72,10 @@ AQUA_WHISPER_IMAGE=ghcr.io/wkf2000/aqua-whisper:latest
 AQUA_WHISPER_PORT=8509
 AQUA_WHISPER_NETWORK=1panel-network
 AQUA_WHISPER_MODEL_DIR=/home/michael/aqua-whisper/whisper-model/faster-whisper-base
+AQUA_WHISPER_DATA_DIR=/home/michael/aqua-whisper/data
 ```
 
-After changing `docker-compose.yaml` in this repo, copy it to the server as `docker-compose.yml` and add any new variables to the server's `.env` before the next deploy — otherwise `docker compose pull` tries to pull the default local image name (`aqua-whisper:latest`) from Docker Hub and fails.
+After changing `docker-compose.yaml` in this repo, copy it to the server as `docker-compose.yml` and add any new variables to the server's `.env` before the next deploy — otherwise `docker compose pull` tries to pull the default local image name (`aqua-whisper:latest`) from Docker Hub and fails. The transcript store is bind-mounted from `AQUA_WHISPER_DATA_DIR` (default `./data` next to the Compose file); back it up by copying that directory.
 
 ## API summary
 
@@ -106,7 +109,8 @@ These endpoints carry no API key by design. In production the frontend is served
 | `SUBTITLE_LANGS` | No   | Subtitle language regex(es) for yt-dlp `--sub-langs` (comma-separated; `all` for any language). Default `en`. |
 | `WHISPER_VAD_FILTER` | No | Skip non-speech segments in Whisper to reduce hallucinations. Default `true`. |
 | `WHISPER_BATCHED`  | No   | Use faster-whisper batched inference (faster on CPU, higher peak memory). Default `false`. |
-| `TRANSCRIPT_CACHE_TTL` | No | Cache successful transcripts by video id, in seconds. Default `604800` (7 days); `0` disables. |
+| `TRANSCRIPT_CACHE_TTL` | No | Reuse a saved transcript only when no older than this many seconds. Default `604800` (7 days); `0` disables reuse. Transcripts are always saved. |
+| `TRANSCRIPT_DB_PATH` | No | SQLite file for durable transcript storage. Default `./data/transcripts.db`; in Docker fixed to `/data/transcripts.db` via the `AQUA_WHISPER_DATA_DIR` bind mount. |
 | `ENV`       | No       | Environment label for logs/traces (e.g. `dev`, `prod`). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP HTTP endpoint for traces (e.g. `http://openobserve:5080/api/default/v1/traces`). If unset, spans are not exported. |
 | `OTEL_EXPORTER_OTLP_HEADERS`  | No | Optional headers: comma-separated `key=value` (e.g. `Authorization=Basic <base64>,stream-name=default` for OpenObserve). |

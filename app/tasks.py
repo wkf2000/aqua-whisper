@@ -6,8 +6,9 @@ from opentelemetry import trace
 
 from app.celery_app import celery_app
 from app.config import settings
+from app.db import get_fresh_transcript, save_transcript
 from app.pipeline import get_transcript
-from app.store import cache_transcript, get_cached_transcript, save_task_result
+from app.store import save_task_result
 from app.youtube import extract_video_id
 
 logger = structlog.get_logger()
@@ -15,30 +16,30 @@ tracer = trace.get_tracer(__name__)
 
 
 def _transcript_with_cache(video_url: str) -> tuple[str, str]:
-    """Return (source, transcript), preferring the per-video cache when enabled."""
+    """Return (source, transcript), preferring a fresh stored transcript when enabled."""
     video_id = extract_video_id(video_url)
     if video_id and settings.TRANSCRIPT_CACHE_TTL > 0:
         try:
-            cached = get_cached_transcript(video_id)
+            stored = get_fresh_transcript(video_id, settings.TRANSCRIPT_CACHE_TTL)
         except Exception:
-            # A cache failure must not fail the job; fall through to the pipeline.
-            logger.warning("transcript_cache.read_failed", video_url=video_url, video_id=video_id)
-            cached = None
-        if cached is not None:
+            # A store failure must not fail the job; fall through to the pipeline.
+            logger.warning("transcript_store.read_failed", video_url=video_url, video_id=video_id)
+            stored = None
+        if stored is not None:
             logger.info(
-                "transcript_cache.hit",
+                "transcript_store.hit",
                 video_url=video_url,
                 video_id=video_id,
-                source=cached[0],
+                source=stored[0],
             )
-            return cached
-        logger.info("transcript_cache.miss", video_url=video_url, video_id=video_id)
+            return stored
+        logger.info("transcript_store.miss", video_url=video_url, video_id=video_id)
     source, transcript = get_transcript(video_url)
-    if video_id and settings.TRANSCRIPT_CACHE_TTL > 0:
+    if video_id:
         try:
-            cache_transcript(video_id, source, transcript)
+            save_transcript(video_id, source, transcript)
         except Exception:
-            logger.warning("transcript_cache.write_failed", video_url=video_url, video_id=video_id)
+            logger.warning("transcript_store.write_failed", video_url=video_url, video_id=video_id)
     return source, transcript
 
 
