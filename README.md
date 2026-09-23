@@ -5,7 +5,7 @@ Async YouTube transcript API: submit a video URL and webhook; the worker fetches
 ## Features
 
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
-- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store with their title, channel, duration, and upload date (reused while no older than `TRANSCRIPT_CACHE_TTL`).
+- **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store with their title, channel, duration, and upload date (videos already in the store are skipped; set `TRANSCRIPT_DEDUP=false` to re-transcribe).
 - **Web UI** — Unauthenticated single-page frontend at `/` with `/ui/transcript` submission and polling endpoints. In production it sits behind Cloudflare, which handles rate limiting and bot protection; the API endpoints remain API-key protected.
 - **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
@@ -109,7 +109,7 @@ These endpoints carry no API key by design. In production the frontend is served
 | `SUBTITLE_LANGS` | No   | Subtitle language regex(es) for yt-dlp `--sub-langs` (comma-separated; `all` for any language). Default `en`. |
 | `WHISPER_VAD_FILTER` | No | Skip non-speech segments in Whisper to reduce hallucinations. Default `true`. |
 | `WHISPER_BATCHED`  | No   | Use faster-whisper batched inference (faster on CPU, higher peak memory). Default `false`. |
-| `TRANSCRIPT_CACHE_TTL` | No | Reuse a saved transcript only when no older than this many seconds. Default `604800` (7 days); `0` disables reuse. Transcripts are always saved. |
+| `TRANSCRIPT_DEDUP` | No | Skip the pipeline when the video already has a saved transcript, whatever its age. Default `true`; `false` always re-runs and refreshes the stored row. |
 | `TRANSCRIPT_DB_PATH` | No | SQLite file for durable transcript storage. Default `./data/transcripts.db`; in Docker fixed to `/data/transcripts.db` via the `AQUA_WHISPER_DATA_DIR` bind mount. |
 | `ENV`       | No       | Environment label for logs/traces (e.g. `dev`, `prod`). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP HTTP endpoint for traces (e.g. `http://openobserve:5080/api/default/v1/traces`). If unset, spans are not exported. |

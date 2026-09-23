@@ -2,15 +2,13 @@
 
 Every completed transcript is stored by video id and kept forever, along with
 the video metadata available at transcription time (title, channel, duration,
-upload date). TRANSCRIPT_CACHE_TTL does not delete rows; it only limits how
-old a stored transcript may be before the pipeline re-runs and refreshes it
-(see app.tasks._transcript_with_cache).
+upload date). While TRANSCRIPT_DEDUP is enabled, a stored video is never
+re-transcribed (see app.tasks._transcript_with_dedup).
 """
 
 import os
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 from app.config import settings
@@ -125,15 +123,3 @@ def get_stored_transcript(video_id: str) -> StoredTranscript | None:
     if row is None:
         return None
     return StoredTranscript(*row)
-
-
-def get_fresh_transcript(video_id: str, max_age_seconds: int) -> tuple[str, str] | None:
-    """Return (source, transcript) only when stored and no older than max_age_seconds."""
-    stored = get_stored_transcript(video_id)
-    if stored is None:
-        return None
-    updated = datetime.strptime(stored.updated_at, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    if now - updated >= timedelta(seconds=max_age_seconds):
-        return None
-    return stored.source, stored.transcript

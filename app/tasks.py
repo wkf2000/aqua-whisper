@@ -6,7 +6,7 @@ from opentelemetry import trace
 
 from app.celery_app import celery_app
 from app.config import settings
-from app.db import get_fresh_transcript, save_transcript
+from app.db import get_stored_transcript, save_transcript
 from app.pipeline import get_transcript
 from app.store import save_task_result
 from app.youtube import extract_video_id
@@ -15,12 +15,12 @@ logger = structlog.get_logger()
 tracer = trace.get_tracer(__name__)
 
 
-def _transcript_with_cache(video_url: str) -> tuple[str, str]:
-    """Return (source, transcript), preferring a fresh stored transcript when enabled."""
+def _transcript_with_dedup(video_url: str) -> tuple[str, str]:
+    """Return (source, transcript), skipping videos already in the store when enabled."""
     video_id = extract_video_id(video_url)
-    if video_id and settings.TRANSCRIPT_CACHE_TTL > 0:
+    if video_id and settings.TRANSCRIPT_DEDUP:
         try:
-            stored = get_fresh_transcript(video_id, settings.TRANSCRIPT_CACHE_TTL)
+            stored = get_stored_transcript(video_id)
         except Exception:
             # A store failure must not fail the job; fall through to the pipeline.
             logger.warning("transcript_store.read_failed", video_url=video_url, video_id=video_id)
@@ -30,9 +30,9 @@ def _transcript_with_cache(video_url: str) -> tuple[str, str]:
                 "transcript_store.hit",
                 video_url=video_url,
                 video_id=video_id,
-                source=stored[0],
+                source=stored.source,
             )
-            return stored
+            return stored.source, stored.transcript
         logger.info("transcript_store.miss", video_url=video_url, video_id=video_id)
     source, transcript, metadata = get_transcript(video_url)
     if video_id:
@@ -70,7 +70,7 @@ def run_transcript_pipeline(
             author=author,
         )
         try:
-            source, transcript = _transcript_with_cache(video_url)
+            source, transcript = _transcript_with_dedup(video_url)
             payload = {
                 "task_id": task_id,
                 "status": "success",
@@ -116,7 +116,7 @@ def run_transcript_pipeline_ui(task_id: str, video_url: str) -> None:
             video_url=video_url,
         )
         try:
-            source, transcript = _transcript_with_cache(video_url)
+            source, transcript = _transcript_with_dedup(video_url)
             payload = {
                 "status": "success",
                 "source": source,

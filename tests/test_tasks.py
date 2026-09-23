@@ -1,13 +1,29 @@
-"""Tests for Celery task: run_transcript_pipeline, webhook POST, and transcript reuse."""
+"""Tests for Celery tasks: run_transcript_pipeline, webhook POST, and dedup."""
 
 from unittest.mock import MagicMock, patch
 
+from app.db import StoredTranscript
 from app.pipeline import NoSubtitlesError, VideoMetadata
-from app.tasks import _transcript_with_cache, run_transcript_pipeline
+from app.tasks import _transcript_with_dedup, run_transcript_pipeline
 
 _META = VideoMetadata(
     title="Test Title", channel="Test Channel", duration=300.0, upload_date="2026-01-01"
 )
+
+
+def _stored(source: str, transcript: str) -> StoredTranscript:
+    """A stored row as the dedup path reads it back from the store."""
+    return StoredTranscript(
+        video_id="abc123def45",
+        source=source,
+        transcript=transcript,
+        title=None,
+        channel=None,
+        duration=None,
+        upload_date=None,
+        created_at="2026-09-23 00:00:00",
+        updated_at="2026-09-23 00:00:00",
+    )
 
 
 def test_task_posts_success_payload_when_get_transcript_returns() -> None:
@@ -99,28 +115,28 @@ def test_task_posts_failed_payload_on_any_exception() -> None:
 
 
 def test_stored_transcript_skips_pipeline() -> None:
-    """When a fresh transcript is stored for the video id, the pipeline is not run."""
+    """When the video is already in the store, the pipeline is not run."""
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
-        patch("app.tasks.get_fresh_transcript", return_value=("manual", "cached text")),
+        patch("app.tasks.get_stored_transcript", return_value=_stored("manual", "stored text")),
         patch("app.tasks.get_transcript") as mock_get,
         patch("app.tasks.save_transcript") as mock_set,
     ):
-        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
-    assert result == ("manual", "cached text")
+        result = _transcript_with_dedup("https://www.youtube.com/watch?v=abc123def45")
+    assert result == ("manual", "stored text")
     mock_get.assert_not_called()
     mock_set.assert_not_called()
 
 
 def test_unstored_transcript_runs_pipeline_and_saves() -> None:
-    """When nothing fresh is stored, the pipeline runs and its result is saved with metadata."""
+    """When the video is not in the store, the pipeline runs and its result is saved."""
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
-        patch("app.tasks.get_fresh_transcript", return_value=None),
+        patch("app.tasks.get_stored_transcript", return_value=None),
         patch("app.tasks.get_transcript", return_value=("auto", "fresh text", _META)),
         patch("app.tasks.save_transcript") as mock_set,
     ):
-        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+        result = _transcript_with_dedup("https://www.youtube.com/watch?v=abc123def45")
     assert result == ("auto", "fresh text")
     mock_set.assert_called_once_with(
         "abc123def45",
@@ -133,16 +149,16 @@ def test_unstored_transcript_runs_pipeline_and_saves() -> None:
     )
 
 
-def test_reuse_disabled_when_ttl_zero() -> None:
-    """TRANSCRIPT_CACHE_TTL=0 disables reuse; the pipeline runs but still saves."""
+def test_dedup_disabled_when_flag_false() -> None:
+    """TRANSCRIPT_DEDUP=false skips the store check; the pipeline runs and saves."""
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
-        patch("app.tasks.settings.TRANSCRIPT_CACHE_TTL", 0),
-        patch("app.tasks.get_fresh_transcript") as mock_get,
+        patch("app.tasks.settings.TRANSCRIPT_DEDUP", False),
+        patch("app.tasks.get_stored_transcript") as mock_get,
         patch("app.tasks.get_transcript", return_value=("whisper", "fresh text", _META)),
         patch("app.tasks.save_transcript") as mock_set,
     ):
-        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+        result = _transcript_with_dedup("https://www.youtube.com/watch?v=abc123def45")
     assert result == ("whisper", "fresh text")
     mock_get.assert_not_called()
     mock_set.assert_called_once_with(
@@ -160,9 +176,9 @@ def test_store_read_failure_still_runs_pipeline() -> None:
     """A store error on read falls through to running the pipeline."""
     with (
         patch("app.tasks.extract_video_id", return_value="abc123def45"),
-        patch("app.tasks.get_fresh_transcript", side_effect=RuntimeError("sqlite down")),
+        patch("app.tasks.get_stored_transcript", side_effect=RuntimeError("sqlite down")),
         patch("app.tasks.get_transcript", return_value=("auto", "text", _META)),
         patch("app.tasks.save_transcript"),
     ):
-        result = _transcript_with_cache("https://www.youtube.com/watch?v=abc123def45")
+        result = _transcript_with_dedup("https://www.youtube.com/watch?v=abc123def45")
     assert result == ("auto", "text")

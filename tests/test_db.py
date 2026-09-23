@@ -85,32 +85,6 @@ def test_creates_parent_directories(monkeypatch, tmp_path) -> None:
     assert path.exists()
 
 
-def test_get_fresh_transcript_respects_max_age(monkeypatch, tmp_path) -> None:
-    """Fresh rows are returned; stale rows and unknown ids are misses."""
-    _use_db(monkeypatch, tmp_path)
-    db.save_transcript(_VIDEO_ID, "manual", "some text")
-
-    assert db.get_fresh_transcript(_VIDEO_ID, 3600) == ("manual", "some text")
-    assert db.get_fresh_transcript(_VIDEO_ID, 0) is None
-    assert db.get_fresh_transcript("missing00000", 3600) is None
-
-
-def test_get_fresh_transcript_returns_none_when_stale(monkeypatch, tmp_path) -> None:
-    """A row older than max_age_seconds is a miss; a wider window accepts it."""
-    _use_db(monkeypatch, tmp_path)
-    db.save_transcript(_VIDEO_ID, "manual", "some text")
-    conn = sqlite3.connect(settings.TRANSCRIPT_DB_PATH)
-    conn.execute(
-        "UPDATE transcripts SET updated_at = datetime('now', '-2 hours') WHERE video_id = ?",
-        (_VIDEO_ID,),
-    )
-    conn.commit()
-    conn.close()
-
-    assert db.get_fresh_transcript(_VIDEO_ID, 3600) is None
-    assert db.get_fresh_transcript(_VIDEO_ID, 7201) == ("manual", "some text")
-
-
 def test_migrates_v1_database_by_adding_metadata_columns(monkeypatch, tmp_path) -> None:
     """A database created before metadata columns existed is upgraded on connect."""
     path = _use_db(monkeypatch, tmp_path)

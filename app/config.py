@@ -23,9 +23,9 @@ class Settings(BaseSettings):
     WHISPER_BATCHED: bool = False
     # Subtitle languages for yt-dlp --sub-langs (regex, comma-separated; "all" for any)
     SUBTITLE_LANGS: str = "en"
-    # Reuse a saved transcript only when no older than this (seconds); 0 disables
-    # reuse. Transcripts are always saved to the SQLite store regardless.
-    TRANSCRIPT_CACHE_TTL: int = 604800
+    # Skip the pipeline for videos already saved in the transcript store (any age);
+    # set False to always re-run and refresh the stored transcript.
+    TRANSCRIPT_DEDUP: bool = True
     # SQLite file for durable transcript storage
     TRANSCRIPT_DB_PATH: str = "./data/transcripts.db"
     # Observability
