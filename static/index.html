@@ -74,7 +74,14 @@
     <div id="result" class="mt-6 hidden">
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs text-muted uppercase tracking-wide font-medium">Transcript</span>
-        <span id="source-badge" class="text-xs text-muted bg-surface px-2 py-0.5 rounded"></span>
+        <div class="flex items-center gap-2">
+          <span id="source-badge" class="text-xs text-muted bg-surface px-2 py-0.5 rounded"></span>
+          <button
+            id="copy-btn"
+            type="button"
+            class="text-xs px-2.5 py-1 rounded bg-surface border border-slate-700 text-muted hover:text-slate-50 hover:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 cursor-pointer"
+          >Copy</button>
+        </div>
       </div>
       <pre id="transcript-text" class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700"></pre>
     </div>
@@ -91,6 +98,7 @@
     const $result  = document.getElementById('result');
     const $text    = document.getElementById('transcript-text');
     const $source  = document.getElementById('source-badge');
+    const $copyBtn = document.getElementById('copy-btn');
 
     function show(el)  { el.classList.remove('hidden'); }
     function hide(el)  { el.classList.add('hidden'); }
@@ -104,6 +112,51 @@
       hide($status); hide($error); hide($result);
       $btn.disabled = false;
     }
+
+    function copyViaExecCommand(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      ta.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      ta.remove();
+      return ok;
+    }
+
+    let copyResetTimer = null;
+
+    function setCopyState(label, colorClass) {
+      $copyBtn.classList.remove('text-muted', 'text-accent', 'text-red-400');
+      $copyBtn.classList.add(colorClass);
+      $copyBtn.textContent = label;
+    }
+
+    function resetCopyButton() {
+      clearTimeout(copyResetTimer);
+      copyResetTimer = null;
+      setCopyState('Copy', 'text-muted');
+    }
+
+    async function handleCopy() {
+      const text = $text.textContent;
+      let ok = false;
+
+      if (navigator.clipboard) {
+        try { await navigator.clipboard.writeText(text); ok = true; } catch { ok = false; }
+      }
+      if (!ok) ok = copyViaExecCommand(text);
+
+      setCopyState(ok ? 'Copied!' : 'Copy failed', ok ? 'text-accent' : 'text-red-400');
+
+      clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(resetCopyButton, 2000);
+    }
+
+    $copyBtn.addEventListener('click', handleCopy);
 
     async function handleSubmit(e) {
       e.preventDefault();
@@ -158,6 +211,7 @@
           hide($status);
 
           if (data.status === 'success') {
+            resetCopyButton();
             $text.textContent = data.transcript;
             $source.textContent = `source: ${data.source}`;
             show($result);
