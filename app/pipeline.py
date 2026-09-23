@@ -1,9 +1,11 @@
 """Transcript pipeline: yt-dlp manual/auto subtitles, then Whisper fallback.
 
-Always returns plain text. Videos not longer than 60 seconds are rejected up
-front with a clear error instead of the old misleading "no subtitles" one.
+Always returns plain text. Live/upcoming broadcasts and videos not longer than
+60 seconds are rejected up front with a clear error instead of the old
+misleading "no subtitles" one.
 """
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +20,10 @@ from app.whisper import get_model
 logger = structlog.get_logger()
 
 MIN_VIDEO_DURATION = 60
+
+# Only finished videos can be transcribed: an ongoing, upcoming or still-processing
+# broadcast ("is_live", "is_upcoming", "post_live") has no stable media to fetch.
+ALLOWED_LIVE_STATUSES = frozenset({"not_live", "was_live"})
 
 # yt-dlp calls fail fast after these timeouts instead of hanging a worker forever.
 _SUBTITLE_TIMEOUT = 120
@@ -46,6 +52,10 @@ class NoSubtitlesError(Exception):
 
 class VideoTooShortError(Exception):
     """Raised when the video is not longer than MIN_VIDEO_DURATION seconds."""
+
+
+class UnsupportedLiveStatusError(Exception):
+    """Raised when the video's live broadcast status is not in ALLOWED_LIVE_STATUSES."""
 
 
 def _run(cmd: list[str], timeout: int) -> None:
@@ -90,10 +100,10 @@ def _plain_lines(segments) -> list[str]:
     return lines
 
 
-def _check_duration(video_url: str) -> None:
-    """Fetch duration up front; reject videos not longer than MIN_VIDEO_DURATION."""
+def _probe_video(video_url: str) -> dict:
+    """Fetch video metadata up front with a single yt-dlp JSON call."""
     result = subprocess.run(
-        ["yt-dlp", "--skip-download", "--print", "%(duration)s", video_url],
+        ["yt-dlp", "--skip-download", "--dump-single-json", video_url],
         capture_output=True,
         timeout=_SUBTITLE_TIMEOUT,
     )
@@ -102,9 +112,36 @@ def _check_duration(video_url: str) -> None:
         raise RuntimeError(f"yt-dlp failed to fetch video info: {stderr or 'no stderr output'}")
     stdout = result.stdout.decode("utf-8", "replace").strip()
     try:
-        duration = float(stdout)
+        info = json.loads(stdout)
     except ValueError as exc:
-        raise RuntimeError(f"yt-dlp returned an unparseable duration: {stdout!r}") from exc
+        raise RuntimeError(f"yt-dlp returned unparseable video info: {stdout[:200]!r}") from exc
+    if not isinstance(info, dict):
+        raise RuntimeError(f"yt-dlp returned unexpected video info: {stdout[:200]!r}")
+    return info
+
+
+def _check_live_status(info: dict, video_url: str) -> None:
+    """Reject anything that is not a finished video (live, upcoming, post-live, unknown)."""
+    live_status = info.get("live_status")
+    if live_status in ALLOWED_LIVE_STATUSES:
+        logger.info("get_transcript.live_status_ok", video_url=video_url, live_status=live_status)
+        return
+    logger.warning(
+        "get_transcript.skipped_live_status", video_url=video_url, live_status=live_status
+    )
+    raise UnsupportedLiveStatusError(
+        f"Video live status {live_status!r} is not supported; only finished videos "
+        f"({', '.join(sorted(ALLOWED_LIVE_STATUSES))}) are transcribed"
+    )
+
+
+def _check_duration(info: dict) -> None:
+    """Reject videos not longer than MIN_VIDEO_DURATION."""
+    raw_duration = info.get("duration")
+    try:
+        duration = float(raw_duration)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"yt-dlp returned an unparseable duration: {raw_duration!r}") from exc
     if duration <= MIN_VIDEO_DURATION:
         raise VideoTooShortError(
             f"Video is {duration:.0f}s long; only videos longer than "
@@ -115,7 +152,9 @@ def _check_duration(video_url: str) -> None:
 def get_transcript(video_url: str) -> tuple[str, str]:
     """Return (source, plain_text). Raises NoSubtitlesError if no transcript available."""
     logger.info("get_transcript.start", video_url=video_url)
-    _check_duration(video_url)
+    info = _probe_video(video_url)
+    _check_live_status(info, video_url)
+    _check_duration(info)
     temp_dir = mkdtemp()
     try:
         out_base = str(Path(temp_dir) / "subs")

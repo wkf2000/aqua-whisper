@@ -1,12 +1,13 @@
 """Tests for transcript pipeline (get_transcript). Mock subprocess/yt-dlp."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.config import settings
-from app.pipeline import VideoTooShortError, get_transcript
+from app.pipeline import UnsupportedLiveStatusError, VideoTooShortError, get_transcript
 from app.whisper import clear_model_cache
 
 
@@ -22,9 +23,17 @@ def _ok(stdout: bytes = b"") -> MagicMock:
     return MagicMock(returncode=0, stdout=stdout)
 
 
-def _is_duration_call(cmd: list) -> bool:
-    """True when cmd is the duration precheck (has --print %(duration)s)."""
-    return "--print" in cmd and cmd[cmd.index("--print") + 1] == "%(duration)s"
+def _is_info_call(cmd: list) -> bool:
+    """True when cmd is the metadata precheck (--dump-single-json)."""
+    return "--dump-single-json" in cmd
+
+
+def _info(duration: object = 300, live_status: object = "not_live") -> MagicMock:
+    """Mocked yt-dlp metadata JSON for the precheck call."""
+    payload: dict = {"duration": duration}
+    if live_status is not None:
+        payload["live_status"] = live_status
+    return MagicMock(returncode=0, stdout=json.dumps(payload).encode())
 
 
 def _make_segment(start: float, end: float, text: str) -> object:
@@ -37,8 +46,8 @@ def test_manual_subtitle_returns_manual_and_plain_text(tmp_path: Path) -> None:
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nmanual line"
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
             idx = cmd.index("--output")
             out_base = cmd[idx + 1]
@@ -61,8 +70,8 @@ def test_manual_subtitle_uses_configured_sub_langs(tmp_path: Path) -> None:
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
         seen.append(cmd)
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
             idx = cmd.index("--output")
             Path(cmd[idx + 1] + ".vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\na")
@@ -87,8 +96,8 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
         nonlocal call_count
         call_count += 1
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         if "--write-auto-sub" in cmd:
             idx = cmd.index("--output")
             out_base = cmd[idx + 1]
@@ -113,8 +122,8 @@ def test_duplicate_caption_lines_collapsed(tmp_path: Path) -> None:
     )
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         if "--write-sub" in cmd:
             idx = cmd.index("--output")
             Path(cmd[idx + 1] + ".vtt").write_text(vtt_body)
@@ -138,8 +147,8 @@ def test_whisper_fallback_when_no_manual_or_auto_returns_whisper_plain_text(
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
         run_calls.append(cmd)
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         if "--write-sub" in cmd or "--write-auto-sub" in cmd:
             return _ok()
         if "-f" in cmd and cmd[cmd.index("-f") + 1] == "ba/b":
@@ -174,8 +183,8 @@ def test_video_too_short_raises_clear_error(tmp_path: Path) -> None:
     """Videos not longer than 60s are rejected with a clear error."""
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"45")
+        if _is_info_call(cmd):
+            return _info(duration=45)
         return _ok()
 
     with (
@@ -186,12 +195,54 @@ def test_video_too_short_raises_clear_error(tmp_path: Path) -> None:
             get_transcript("https://www.youtube.com/watch?v=short")
 
 
+def test_was_live_video_is_transcribed(tmp_path: Path) -> None:
+    """A finished livestream (was_live) is processed like a regular video."""
+    vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\npast stream line"
+
+    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(live_status="was_live")
+        if "--write-sub" in cmd:
+            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content = get_transcript("https://www.youtube.com/watch?v=past")
+    assert source == "manual"
+    assert content == "past stream line"
+
+
+@pytest.mark.parametrize("live_status", ["is_live", "is_upcoming", "post_live", None])
+def test_unsupported_live_status_is_skipped(tmp_path: Path, live_status: str | None) -> None:
+    """Ongoing, upcoming, post-live and unknown statuses are skipped before any download."""
+    run_calls: list[list] = []
+
+    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+        run_calls.append(cmd)
+        if _is_info_call(cmd):
+            return _info(duration=None, live_status=live_status)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        with pytest.raises(UnsupportedLiveStatusError, match=str(live_status)):
+            get_transcript("https://www.youtube.com/watch?v=live")
+
+    # Only the metadata probe ran; no subtitle or audio download was attempted.
+    assert len(run_calls) == 1
+
+
 def test_ytdlp_failure_raises_clear_error(tmp_path: Path) -> None:
     """A non-zero yt-dlp exit raises a clear error instead of a silent fallthrough."""
 
     def run_effect(cmd: list, **kwargs: object) -> MagicMock:
-        if _is_duration_call(cmd):
-            return MagicMock(returncode=0, stdout=b"300")
+        if _is_info_call(cmd):
+            return _info()
         return MagicMock(returncode=2, stdout=b"", stderr=b"boom")
 
     with (
