@@ -61,7 +61,7 @@ With no extra configuration the Compose file builds the image locally and publis
 
 Pushes to `main` are built and deployed automatically by CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 
-1. **Check** — every push and PR runs the Python Ruff checks, the web ESLint check, and the pytest suite.
+1. **Check** — every push and PR runs the Python Ruff checks, the mypy type check, the web ESLint check, and the pytest suite.
 2. **Build** — when checks pass, the image is pushed to `ghcr.io/wkf2000/aqua-whisper` (tagged `latest` plus the commit sha).
 3. **Deploy** — CI SSHes into the server and, in the deploy directory, runs `docker compose -f docker-compose.yml pull`, then `up -d` (Compose recreates only the services whose image or config changed, with no full downtime).
 
@@ -136,6 +136,7 @@ These endpoints carry no API key by design. In production the frontend is served
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
+uv run mypy
 npm ci && npm run lint
 uv run pytest -v
 ```

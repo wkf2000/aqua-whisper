@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import structlog
 from faster_whisper import BatchedInferencePipeline
@@ -69,7 +69,7 @@ class VideoMetadata(NamedTuple):
     upload_date: str | None
 
 
-def _extract_metadata(info: dict) -> VideoMetadata:
+def _extract_metadata(info: dict[str, Any]) -> VideoMetadata:
     """Pull browsable metadata from the yt-dlp info dict.
 
     yt-dlp reports upload_date as YYYYMMDD; it is normalized to ISO YYYY-MM-DD.
@@ -131,7 +131,7 @@ def _vtt_to_plain_text(vtt: str) -> str:
     return "\n".join(_dedupe(_vtt_lines(vtt)))
 
 
-def _probe_video(video_url: str) -> dict:
+def _probe_video(video_url: str) -> dict[str, Any]:
     """Fetch video metadata up front with a single yt-dlp JSON call."""
     cmd = ["yt-dlp", "--skip-download", "--dump-single-json", video_url]
     stdout = _run(cmd, _SUBTITLE_TIMEOUT)
@@ -144,7 +144,7 @@ def _probe_video(video_url: str) -> dict:
     return info
 
 
-def _check_live_status(info: dict, video_url: str) -> None:
+def _check_live_status(info: dict[str, Any], video_url: str) -> None:
     """Reject anything that is not a finished video (live, upcoming, post-live, unknown)."""
     live_status = info.get("live_status")
     if live_status in ALLOWED_LIVE_STATUSES:
@@ -159,9 +159,10 @@ def _check_live_status(info: dict, video_url: str) -> None:
     )
 
 
-def _check_duration(info: dict) -> None:
+def _check_duration(info: dict[str, Any]) -> None:
     """Reject videos not longer than MIN_VIDEO_DURATION."""
-    raw_duration = info.get("duration")
+    # The JSON value type is unknown; float() still rejects bad values at runtime.
+    raw_duration: Any = info.get("duration")
     try:
         duration = float(raw_duration)
     except (TypeError, ValueError) as exc:

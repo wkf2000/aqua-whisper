@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 # Set env before importing app so pydantic-settings picks them up.
@@ -16,14 +17,16 @@ from app.main import app
 client = TestClient(app)
 
 
-def _use_db(monkeypatch, tmp_path) -> Path:
+def _use_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the store at a fresh per-test database file."""
     path = tmp_path / "data" / "transcripts.db"
     monkeypatch.setattr(settings, "TRANSCRIPT_DB_PATH", str(path))
     return path
 
 
-def test_history_empty_store_returns_no_items(monkeypatch, tmp_path) -> None:
+def test_history_empty_store_returns_no_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """An empty store lists zero items."""
     _use_db(monkeypatch, tmp_path)
     res = client.get("/ui/history")
@@ -31,7 +34,7 @@ def test_history_empty_store_returns_no_items(monkeypatch, tmp_path) -> None:
     assert res.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
 
-def test_history_lists_saved_transcripts(monkeypatch, tmp_path) -> None:
+def test_history_lists_saved_transcripts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Saved rows are listed with metadata and without the transcript text."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript("vid11111111", "manual", "some text", title="Alpha", channel="Chan")
@@ -49,7 +52,7 @@ def test_history_lists_saved_transcripts(monkeypatch, tmp_path) -> None:
     assert "transcript" not in item
 
 
-def test_history_search_and_source_filters(monkeypatch, tmp_path) -> None:
+def test_history_search_and_source_filters(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """q matches titles; source narrows; filters combine."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript("vid11111111", "manual", "a", title="Alpha Talk")
@@ -67,7 +70,7 @@ def test_history_search_and_source_filters(monkeypatch, tmp_path) -> None:
     assert res.json()["total"] == 0
 
 
-def test_history_pagination_params(monkeypatch, tmp_path) -> None:
+def test_history_pagination_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """limit/offset page through results while total stays the full count."""
     _use_db(monkeypatch, tmp_path)
     for i in range(3):
@@ -81,7 +84,7 @@ def test_history_pagination_params(monkeypatch, tmp_path) -> None:
     assert data["offset"] == 2
 
 
-def test_history_rejects_invalid_params(monkeypatch, tmp_path) -> None:
+def test_history_rejects_invalid_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Unknown sources/sorts and out-of-range limits are rejected with 400."""
     _use_db(monkeypatch, tmp_path)
     assert client.get("/ui/history", params={"source": "nope"}).status_code == 400
@@ -90,14 +93,14 @@ def test_history_rejects_invalid_params(monkeypatch, tmp_path) -> None:
     assert client.get("/ui/history", params={"offset": -1}).status_code == 400
 
 
-def test_history_rejects_huge_offset(monkeypatch, tmp_path) -> None:
+def test_history_rejects_huge_offset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Offsets beyond the allowed bound are rejected with 400, not a 500."""
     _use_db(monkeypatch, tmp_path)
     assert client.get("/ui/history", params={"offset": 2**63}).status_code == 400
     assert client.get("/ui/history", params={"offset": 10**9}).status_code == 200
 
 
-def test_history_detail_returns_transcript(monkeypatch, tmp_path) -> None:
+def test_history_detail_returns_transcript(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The detail endpoint returns the full stored transcript with metadata."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript("vid11111111", "manual", "the text", title="Alpha")
@@ -110,7 +113,7 @@ def test_history_detail_returns_transcript(monkeypatch, tmp_path) -> None:
     assert data["title"] == "Alpha"
 
 
-def test_history_detail_unknown_video_404s(monkeypatch, tmp_path) -> None:
+def test_history_detail_unknown_video_404s(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """An unknown video id returns 404."""
     _use_db(monkeypatch, tmp_path)
     assert client.get("/ui/history/missing00000").status_code == 404

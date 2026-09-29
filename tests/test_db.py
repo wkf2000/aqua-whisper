@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from app import db
 from app.config import settings
 
@@ -21,14 +23,14 @@ CREATE TABLE transcripts (
 """
 
 
-def _use_db(monkeypatch, tmp_path) -> Path:
+def _use_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the store at a fresh per-test database file (in a missing dir)."""
     path = tmp_path / "data" / "transcripts.db"
     monkeypatch.setattr(settings, "TRANSCRIPT_DB_PATH", str(path))
     return path
 
 
-def test_save_and_get_roundtrip(monkeypatch, tmp_path) -> None:
+def test_save_and_get_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A saved transcript is returned by get_stored_transcript with its metadata."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript(
@@ -55,13 +57,15 @@ def test_save_and_get_roundtrip(monkeypatch, tmp_path) -> None:
     assert datetime.now(timezone.utc) - updated < timedelta(minutes=1)
 
 
-def test_get_unknown_video_returns_none(monkeypatch, tmp_path) -> None:
+def test_get_unknown_video_returns_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Nothing is stored for an unknown video id."""
     _use_db(monkeypatch, tmp_path)
     assert db.get_stored_transcript("missing00000") is None
 
 
-def test_save_upsert_refreshes_existing_row(monkeypatch, tmp_path) -> None:
+def test_save_upsert_refreshes_existing_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Re-saving a video id refreshes its row instead of creating a second one."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript(_VIDEO_ID, "manual", "first", title="First Title")
@@ -76,7 +80,7 @@ def test_save_upsert_refreshes_existing_row(monkeypatch, tmp_path) -> None:
     assert row.channel == "C"
 
 
-def test_creates_parent_directories(monkeypatch, tmp_path) -> None:
+def test_creates_parent_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The store creates missing parent directories for the database file."""
     path = _use_db(monkeypatch, tmp_path)
 
@@ -85,7 +89,9 @@ def test_creates_parent_directories(monkeypatch, tmp_path) -> None:
     assert path.exists()
 
 
-def test_migrates_v1_database_by_adding_metadata_columns(monkeypatch, tmp_path) -> None:
+def test_migrates_v1_database_by_adding_metadata_columns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A database created before metadata columns existed is upgraded on connect."""
     path = _use_db(monkeypatch, tmp_path)
     path.parent.mkdir(parents=True)
@@ -123,7 +129,7 @@ _SEED_ROWS = (
 )
 
 
-def _seed_listing(monkeypatch, tmp_path) -> None:
+def _seed_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Seed three rows with distinct created_at values (vid3 newest, vid1 oldest)."""
     _use_db(monkeypatch, tmp_path)
     for video_id, source, title, channel, duration, upload_date in _SEED_ROWS:
@@ -146,7 +152,9 @@ def _seed_listing(monkeypatch, tmp_path) -> None:
     conn.close()
 
 
-def test_list_returns_all_newest_first_with_total(monkeypatch, tmp_path) -> None:
+def test_list_returns_all_newest_first_with_total(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Default listing is newest first and reports the full total."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts()
@@ -158,7 +166,9 @@ def test_list_returns_all_newest_first_with_total(monkeypatch, tmp_path) -> None
     assert rows[0].upload_date == "2026-03-01"
 
 
-def test_list_search_matches_title_channel_and_video_id(monkeypatch, tmp_path) -> None:
+def test_list_search_matches_title_channel_and_video_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """q matches title (case-insensitive), channel, and video id."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(q="beta")
@@ -172,7 +182,9 @@ def test_list_search_matches_title_channel_and_video_id(monkeypatch, tmp_path) -
     assert rows[0].video_id == "vid33333333"
 
 
-def test_list_search_escapes_like_wildcards(monkeypatch, tmp_path) -> None:
+def test_list_search_escapes_like_wildcards(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Literal % and _ in the query do not act as LIKE wildcards."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript("vid44444444", "manual", "text", title="100% certain")
@@ -186,7 +198,9 @@ def test_list_search_escapes_like_wildcards(monkeypatch, tmp_path) -> None:
     assert db.list_transcripts(q="Beta")[1] == 1
 
 
-def test_list_source_filter_combines_with_search(monkeypatch, tmp_path) -> None:
+def test_list_source_filter_combines_with_search(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The source filter narrows the search results."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(source="whisper")
@@ -197,7 +211,7 @@ def test_list_source_filter_combines_with_search(monkeypatch, tmp_path) -> None:
     assert rows[0].video_id == "vid33333333"
 
 
-def test_list_sort_orders(monkeypatch, tmp_path) -> None:
+def test_list_sort_orders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Whitelisted sorts order by age, duration, and title."""
     _seed_listing(monkeypatch, tmp_path)
     assert [r.video_id for r in db.list_transcripts(sort="oldest")[0]] == [
@@ -222,7 +236,7 @@ def test_list_sort_orders(monkeypatch, tmp_path) -> None:
     ]
 
 
-def test_list_sort_null_duration_last(monkeypatch, tmp_path) -> None:
+def test_list_sort_null_duration_last(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Rows without duration (saved before metadata) sort last in duration sorts."""
     _seed_listing(monkeypatch, tmp_path)
     db.save_transcript("vid77777777", "manual", "no metadata")
@@ -233,7 +247,7 @@ def test_list_sort_null_duration_last(monkeypatch, tmp_path) -> None:
         assert rows[-1].video_id == "vid77777777"
 
 
-def test_list_sort_null_title_last(monkeypatch, tmp_path) -> None:
+def test_list_sort_null_title_last(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Rows without a title (saved before metadata) sort last in the title sort."""
     _seed_listing(monkeypatch, tmp_path)
     db.save_transcript("vid77777777", "manual", "no metadata")
@@ -245,7 +259,7 @@ def test_list_sort_null_title_last(monkeypatch, tmp_path) -> None:
     assert rows[-1].video_id == "vid77777777"
 
 
-def test_list_pagination(monkeypatch, tmp_path) -> None:
+def test_list_pagination(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """limit/offset page through results while total stays the full count."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(limit=2, offset=0)
@@ -257,7 +271,9 @@ def test_list_pagination(monkeypatch, tmp_path) -> None:
     assert [r.video_id for r in rows] == ["vid11111111"]
 
 
-def test_list_unknown_sort_falls_back_to_newest(monkeypatch, tmp_path) -> None:
+def test_list_unknown_sort_falls_back_to_newest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Sort keys outside the whitelist fall back to newest; nothing is interpolated."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(sort="newest; DROP TABLE transcripts")

@@ -8,7 +8,8 @@ The unauthenticated frontend is plain HTML and browser JavaScript in `static/`.
 
 ## Repository conventions
 
-- Keep Python code compatible with Python 3.13 and format it with Ruff.
+- Keep Python code compatible with Python 3.13, format it with Ruff, and keep it passing
+  mypy strict (`uv run mypy`).
 - Keep FastAPI route behavior and API error shapes stable unless the task
   explicitly changes the API.
 - Keep transcript processing in the pipeline/task modules and persistence

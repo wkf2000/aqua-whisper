@@ -1,10 +1,12 @@
 """FastAPI app with API key–protected routes."""
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +33,9 @@ logger = structlog.get_logger()
 
 
 @app.middleware("http")
-async def logging_middleware(request: Request, call_next):
+async def logging_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Log a single structured event per request with basic metadata."""
     response = await call_next(request)
     logger.info(
@@ -106,7 +110,7 @@ def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
 
 
 @app.get("/ui/transcript/{task_id}")
-def ui_transcript_status(task_id: str) -> dict:
+def ui_transcript_status(task_id: str) -> dict[str, Any]:
     """Poll for a UI transcript task result."""
     result = get_task_result(task_id)
     if result is None:
@@ -121,7 +125,7 @@ def ui_history(
     sort: str = Query(default="newest", pattern="^(newest|oldest|longest|shortest|title)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0, le=1_000_000_000),
-) -> dict:
+) -> dict[str, Any]:
     """List saved transcripts with search, source, sort, and pagination filters."""
     rows, total = list_transcripts(q=q, source=source, sort=sort, limit=limit, offset=offset)
     return {
@@ -133,7 +137,7 @@ def ui_history(
 
 
 @app.get("/ui/history/{video_id}")
-def ui_history_detail(video_id: str) -> dict:
+def ui_history_detail(video_id: str) -> dict[str, Any]:
     """Return one saved transcript with its metadata and full text."""
     row = get_stored_transcript(video_id)
     if row is None:

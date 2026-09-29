@@ -35,4 +35,7 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_HEADERS: str | None = None
 
 
-settings = Settings()
+# pydantic-settings fills required fields from the environment (or .env) at startup;
+# mypy's synthesized __init__ cannot see that, so its missing-argument error is a
+# false positive here. The value itself is validated by Settings on first use.
+settings = Settings()  # type: ignore[call-arg]

@@ -1,6 +1,7 @@
 """Tests for transcript pipeline (get_transcript). Mock subprocess/yt-dlp."""
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +13,7 @@ from app.whisper import clear_model_cache
 
 
 @pytest.fixture(autouse=True)
-def _reset_model_cache() -> None:
+def _reset_model_cache() -> Iterator[None]:
     """Each test gets a fresh (mocked) model load."""
     clear_model_cache()
     yield
@@ -23,7 +24,7 @@ def _ok(stdout: bytes = b"") -> MagicMock:
     return MagicMock(returncode=0, stdout=stdout)
 
 
-def _is_info_call(cmd: list) -> bool:
+def _is_info_call(cmd: list[str]) -> bool:
     """True when cmd is the metadata precheck (--dump-single-json)."""
     return "--dump-single-json" in cmd
 
@@ -36,7 +37,7 @@ def _info(
     upload_date: object = None,
 ) -> MagicMock:
     """Mocked yt-dlp metadata JSON for the precheck call."""
-    payload: dict = {
+    payload: dict[str, object] = {
         "duration": duration,
         "title": title,
         "channel": channel,
@@ -56,7 +57,7 @@ def test_manual_subtitle_returns_manual_and_plain_text(tmp_path: Path) -> None:
     """When yt-dlp (mocked) writes a manual .vtt, plain text is returned without markup."""
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nmanual line"
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info()
         if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
@@ -77,9 +78,9 @@ def test_manual_subtitle_returns_manual_and_plain_text(tmp_path: Path) -> None:
 
 def test_manual_subtitle_uses_configured_sub_langs(tmp_path: Path) -> None:
     """Manual subtitle download passes --sub-langs for the configured language."""
-    seen: list[list] = []
+    seen: list[list[str]] = []
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         seen.append(cmd)
         if _is_info_call(cmd):
             return _info()
@@ -104,7 +105,7 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
 
     call_count = 0
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         nonlocal call_count
         call_count += 1
         if _is_info_call(cmd):
@@ -132,7 +133,7 @@ def test_duplicate_caption_lines_collapsed(tmp_path: Path) -> None:
         "00:00:01.000 --> 00:00:02.000\nrolling caption"
     )
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info()
         if "--write-sub" in cmd:
@@ -154,9 +155,9 @@ def test_whisper_fallback_when_no_manual_or_auto_returns_whisper_plain_text(
     """When neither manual nor auto subs exist, audio is downloaded and Whisper runs."""
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    run_calls: list[list] = []
+    run_calls: list[list[str]] = []
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         run_calls.append(cmd)
         if _is_info_call(cmd):
             return _info()
@@ -193,7 +194,7 @@ def test_whisper_fallback_when_no_manual_or_auto_returns_whisper_plain_text(
 def test_video_too_short_raises_clear_error(tmp_path: Path) -> None:
     """Videos not longer than 60s are rejected with a clear error."""
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info(duration=45)
         return _ok()
@@ -210,7 +211,7 @@ def test_was_live_video_is_transcribed(tmp_path: Path) -> None:
     """A finished livestream (was_live) is processed like a regular video."""
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\npast stream line"
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info(live_status="was_live")
         if "--write-sub" in cmd:
@@ -229,9 +230,9 @@ def test_was_live_video_is_transcribed(tmp_path: Path) -> None:
 @pytest.mark.parametrize("live_status", ["is_live", "is_upcoming", "post_live", None])
 def test_unsupported_live_status_is_skipped(tmp_path: Path, live_status: str | None) -> None:
     """Ongoing, upcoming, post-live and unknown statuses are skipped before any download."""
-    run_calls: list[list] = []
+    run_calls: list[list[str]] = []
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         run_calls.append(cmd)
         if _is_info_call(cmd):
             return _info(duration=None, live_status=live_status)
@@ -251,7 +252,7 @@ def test_unsupported_live_status_is_skipped(tmp_path: Path, live_status: str | N
 def test_ytdlp_failure_raises_clear_error(tmp_path: Path) -> None:
     """A non-zero yt-dlp exit raises a clear error instead of a silent fallthrough."""
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info()
         return MagicMock(returncode=2, stdout=b"", stderr=b"boom")
@@ -268,7 +269,7 @@ def test_metadata_extracted_from_probe_info(tmp_path: Path) -> None:
     """Video metadata from the probe is returned, with upload_date normalized to ISO."""
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nmeta line"
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return _info(title="A Talk", channel="Some Channel", upload_date="20260101")
         if "--write-sub" in cmd:
@@ -292,7 +293,7 @@ def test_metadata_falls_back_to_uploader_when_channel_missing(tmp_path: Path) ->
     info = {"duration": 300, "live_status": "not_live", "uploader": "Uploader Name"}
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nline"
 
-    def run_effect(cmd: list, **kwargs: object) -> MagicMock:
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
             return MagicMock(returncode=0, stdout=json.dumps(info).encode())
         if "--write-sub" in cmd:
