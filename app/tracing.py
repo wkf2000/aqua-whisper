@@ -1,9 +1,5 @@
 """OpenTelemetry tracing configuration for the application."""
 
-from __future__ import annotations
-
-from typing import Optional
-
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
@@ -28,7 +24,7 @@ def _parse_otlp_headers(headers_str: str | None) -> dict[str, str]:
     return out
 
 
-def setup_tracing(service_name: str, environment: Optional[str] = None) -> None:
+def setup_tracing(service_name: str, environment: str | None = None) -> None:
     """Configure a global TracerProvider with OTLP exporter to OpenObserve."""
     global _TRACING_CONFIGURED
     if _TRACING_CONFIGURED:
@@ -43,10 +39,11 @@ def setup_tracing(service_name: str, environment: Optional[str] = None) -> None:
     resource = Resource.create(resource_attrs)
     provider = TracerProvider(resource=resource)
 
-    endpoint = getattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", None)
-    if endpoint:
-        headers = _parse_otlp_headers(getattr(settings, "OTEL_EXPORTER_OTLP_HEADERS", None))
-        exporter = OTLPSpanExporter(endpoint=endpoint, headers=headers or None)
+    if settings.OTEL_EXPORTER_OTLP_ENDPOINT:
+        headers = _parse_otlp_headers(settings.OTEL_EXPORTER_OTLP_HEADERS)
+        exporter = OTLPSpanExporter(
+            endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT, headers=headers or None
+        )
         span_processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(span_processor)
 

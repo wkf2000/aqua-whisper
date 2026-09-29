@@ -9,34 +9,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
-          colors: {
-            surface: '#1E293B',
-            bg: '#0F172A',
-            accent: '#22C55E',
-            muted: '#94A3B8',
-          },
-        },
-      },
-    };
-  </script>
-  <style>
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner {
-      width: 24px; height: 24px;
-      border: 3px solid #334155;
-      border-top-color: #22C55E;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .spinner { animation-duration: 2s; }
-    }
-  </style>
+  <script src="/static/js/tailwind.config.js"></script>
+  <link rel="stylesheet" href="/static/css/app.css" />
 </head>
 <body class="bg-bg text-slate-50 font-sans min-h-screen flex items-center justify-center px-4 sm:px-6 lg:px-8">
 

@@ -1,3 +1,5 @@
+import { hide, setError, show } from './ui.js';
+
 const PAGE_SIZE = 50;
 
 const $search = document.getElementById('search');
@@ -12,19 +14,6 @@ const $pager = document.getElementById('pager');
 const $range = document.getElementById('range');
 const $prev = document.getElementById('prev');
 const $next = document.getElementById('next');
-
-function show(element) {
-  element.classList.remove('hidden');
-}
-
-function hide(element) {
-  element.classList.add('hidden');
-}
-
-function setError(message) {
-  $error.querySelector('p').textContent = message;
-  show($error);
-}
 
 function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (character) => ({
@@ -86,7 +75,7 @@ async function loadHistory() {
   } catch (error) {
     if (sequence !== requestSeq) return; // A newer request owns the UI now.
     hide($status);
-    setError(error.message);
+    setError($error, error.message);
   }
 }
 

@@ -50,6 +50,13 @@ def validation_exception_handler(_request: Request, exc: RequestValidationError)
     return JSONResponse(status_code=400, content={"detail": "Invalid request body"})
 
 
+def _new_task_id(video_url: str) -> str:
+    """Reject non-YouTube URLs and return a fresh task id."""
+    if not is_youtube_url(video_url):
+        raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
+    return str(uuid4())
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     """Health check: returns 200 when API is up. No auth required."""
@@ -68,9 +75,7 @@ def transcript(
     _: None = Depends(require_api_key),
 ) -> dict[str, str]:
     """Accept video_url and webhook_url, enqueue transcript task, return 202 with task_id."""
-    if not is_youtube_url(body.video_url):
-        raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
-    task_id = str(uuid4())
+    task_id = _new_task_id(body.video_url)
     run_transcript_pipeline.apply_async(
         args=[task_id, body.video_url, body.webhook_url, body.author]
     )
@@ -95,9 +100,7 @@ def ui_history_page() -> FileResponse:
 @app.post("/ui/transcript", status_code=202)
 def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
     """Accept a YouTube URL, enqueue transcript task, return task_id."""
-    if not is_youtube_url(body.video_url):
-        raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
-    task_id = str(uuid4())
+    task_id = _new_task_id(body.video_url)
     run_transcript_pipeline_ui.apply_async(args=[task_id, body.video_url])
     return {"task_id": task_id}
 
@@ -122,19 +125,7 @@ def ui_history(
     """List saved transcripts with search, source, sort, and pagination filters."""
     rows, total = list_transcripts(q=q, source=source, sort=sort, limit=limit, offset=offset)
     return {
-        "items": [
-            {
-                "video_id": row.video_id,
-                "source": row.source,
-                "title": row.title,
-                "channel": row.channel,
-                "duration": row.duration,
-                "upload_date": row.upload_date,
-                "created_at": row.created_at,
-                "updated_at": row.updated_at,
-            }
-            for row in rows
-        ],
+        "items": [row._asdict() for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -147,14 +138,4 @@ def ui_history_detail(video_id: str) -> dict:
     row = get_stored_transcript(video_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Transcript not found")
-    return {
-        "video_id": row.video_id,
-        "source": row.source,
-        "title": row.title,
-        "channel": row.channel,
-        "duration": row.duration,
-        "upload_date": row.upload_date,
-        "transcript": row.transcript,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-    }
+    return row._asdict()

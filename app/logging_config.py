@@ -1,7 +1,5 @@
 """Application-wide structlog configuration for JSON logging."""
 
-from __future__ import annotations
-
 import logging
 import sys
 from typing import Any
@@ -60,9 +58,8 @@ def setup_logging(service_name: str, environment: str | None = None) -> None:
         stream=sys.stdout,
     )
 
-    # Bind static context so every log line has these fields.
-    logger = structlog.get_logger()
-    bind_args: dict[str, Any] = {"service": service_name}
+    # Bind static context (merged by merge_contextvars) so every log line carries it.
+    context: dict[str, Any] = {"service": service_name}
     if environment:
-        bind_args["environment"] = environment
-    logger.bind(**bind_args)
+        context["environment"] = environment
+    structlog.contextvars.bind_contextvars(**context)

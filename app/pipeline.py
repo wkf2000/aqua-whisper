@@ -8,6 +8,7 @@ misleading "no subtitles" one.
 import json
 import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import NamedTuple
@@ -85,8 +86,11 @@ def _extract_metadata(info: dict) -> VideoMetadata:
     )
 
 
-def _run(cmd: list[str], timeout: int) -> None:
-    """Run a yt-dlp command; raise a clear error on non-zero exit or timeout."""
+def _run(cmd: list[str], timeout: int) -> str:
+    """Run a yt-dlp command and return its decoded stdout.
+
+    Raises a clear error on non-zero exit or timeout instead of hanging the worker.
+    """
     logger.info("yt_dlp.run", command=cmd[0], args=cmd[1:])
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -97,47 +101,40 @@ def _run(cmd: list[str], timeout: int) -> None:
         raise RuntimeError(
             f"yt-dlp failed with exit code {result.returncode}: {stderr or 'no stderr output'}"
         )
+    return result.stdout.decode("utf-8", "replace").strip()
+
+
+def _dedupe(lines: Iterable[str]) -> list[str]:
+    """Keep non-empty lines, collapsing consecutive duplicates (rolling captions)."""
+    out: list[str] = []
+    prev: str | None = None
+    for raw in lines:
+        line = raw.strip()
+        if line and line != prev:
+            out.append(line)
+            prev = line
+    return out
+
+
+def _vtt_lines(vtt: str) -> list[str]:
+    """Caption lines from a VTT file, excluding the header and timestamp cues."""
+    lines: list[str] = []
+    for raw in vtt.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("WEBVTT") and "-->" not in line:
+            lines.append(line)
+    return lines
 
 
 def _vtt_to_plain_text(vtt: str) -> str:
     """Strip VTT markup and collapse consecutive duplicate caption lines."""
-    lines: list[str] = []
-    prev: str | None = None
-    for raw in vtt.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("WEBVTT") or "-->" in line:
-            continue
-        if line == prev:
-            continue
-        lines.append(line)
-        prev = line
-    return "\n".join(lines)
-
-
-def _plain_lines(segments) -> list[str]:
-    """Collapse transcribed segments into deduplicated plain text lines."""
-    lines: list[str] = []
-    prev: str | None = None
-    for seg in segments:
-        text = getattr(seg, "text", "").strip()
-        if not text or text == prev:
-            continue
-        lines.append(text)
-        prev = text
-    return lines
+    return "\n".join(_dedupe(_vtt_lines(vtt)))
 
 
 def _probe_video(video_url: str) -> dict:
     """Fetch video metadata up front with a single yt-dlp JSON call."""
-    result = subprocess.run(
-        ["yt-dlp", "--skip-download", "--dump-single-json", video_url],
-        capture_output=True,
-        timeout=_SUBTITLE_TIMEOUT,
-    )
-    if result.returncode != 0:
-        stderr = (result.stderr or b"").decode("utf-8", "replace").strip()[-500:]
-        raise RuntimeError(f"yt-dlp failed to fetch video info: {stderr or 'no stderr output'}")
-    stdout = result.stdout.decode("utf-8", "replace").strip()
+    cmd = ["yt-dlp", "--skip-download", "--dump-single-json", video_url]
+    stdout = _run(cmd, _SUBTITLE_TIMEOUT)
     try:
         info = json.loads(stdout)
     except ValueError as exc:
@@ -263,7 +260,7 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
             )
         else:
             segments, _ = model.transcribe(audio_path, vad_filter=settings.WHISPER_VAD_FILTER)
-        transcript = "\n".join(_plain_lines(segments)).strip()
+        transcript = "\n".join(_dedupe(getattr(seg, "text", "") for seg in segments))
         logger.info("get_transcript.whisper_fallback_success", video_url=video_url)
         return ("whisper", transcript, metadata)
     finally:

@@ -15,12 +15,7 @@ celery_app = Celery(
 )
 
 
-def _configure_worker_observability() -> None:
-    env = getattr(settings, "ENV", None)
-    setup_logging(service_name="aqua-whisper-worker", environment=env)
-    setup_tracing(service_name="aqua-whisper-worker", environment=env)
-
-
-_configure_worker_observability()
+setup_logging(service_name="aqua-whisper-worker", environment=settings.ENV)
+setup_tracing(service_name="aqua-whisper-worker", environment=settings.ENV)
 
 celery_app.autodiscover_tasks(["app"])

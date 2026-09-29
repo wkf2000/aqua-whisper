@@ -1,3 +1,5 @@
+import { hide, setError, show } from './ui.js';
+
 const POLL_INTERVAL = 3000;
 const POLL_TIMEOUT = 5 * 60 * 1000;
 
@@ -10,19 +12,6 @@ const $result = document.getElementById('result');
 const $text = document.getElementById('transcript-text');
 const $source = document.getElementById('source-badge');
 const $copyBtn = document.getElementById('copy-btn');
-
-function show(element) {
-  element.classList.remove('hidden');
-}
-
-function hide(element) {
-  element.classList.add('hidden');
-}
-
-function setError(message) {
-  $error.querySelector('p').textContent = message;
-  show($error);
-}
 
 function resetUI() {
   hide($status);
@@ -111,7 +100,7 @@ async function handleSubmit(event) {
     pollResult(taskId);
   } catch (error) {
     hide($status);
-    setError(error.message);
+    setError($error, error.message);
     $btn.disabled = false;
   }
 }
@@ -123,7 +112,7 @@ function pollResult(taskId) {
     if (Date.now() - start > POLL_TIMEOUT) {
       clearInterval(timer);
       hide($status);
-      setError('Timed out waiting for transcript. Please try again.');
+      setError($error, 'Timed out waiting for transcript. Please try again.');
       $btn.disabled = false;
       return;
     }
@@ -143,14 +132,14 @@ function pollResult(taskId) {
         $source.textContent = `source: ${data.source}`;
         show($result);
       } else {
-        setError(data.error || 'Transcript processing failed.');
+        setError($error, data.error || 'Transcript processing failed.');
       }
 
       $btn.disabled = false;
     } catch {
       clearInterval(timer);
       hide($status);
-      setError('Lost connection to the server.');
+      setError($error, 'Lost connection to the server.');
       $btn.disabled = false;
     }
   }, POLL_INTERVAL);
