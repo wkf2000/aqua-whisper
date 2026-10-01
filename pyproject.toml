@@ -12,7 +12,7 @@ dependencies = [
     "httpx",
     "pydantic-settings",
     "faster-whisper",
-    "yt-dlp",
+    "yt-dlp[curl-cffi]",
     "structlog",
     "opentelemetry-api",
     "opentelemetry-sdk",

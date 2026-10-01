@@ -125,6 +125,68 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
     assert content == "auto line"
 
 
+def test_manual_subtitle_429_falls_back_to_auto(tmp_path: Path) -> None:
+    """A failed manual-subtitle download (HTTP 429) falls through to auto subtitles."""
+    vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nauto line"
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
+            return MagicMock(
+                returncode=1,
+                stdout=b"",
+                stderr=b"HTTP Error 429: Too Many Requests",
+            )
+        if "--write-auto-sub" in cmd:
+            idx = cmd.index("--output")
+            Path(cmd[idx + 1] + ".vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=xyz")
+    assert source == "auto"
+    assert content == "auto line"
+
+
+def test_subtitle_download_429_falls_back_to_whisper(tmp_path: Path) -> None:
+    """When both subtitle downloads fail (HTTP 429), Whisper is tried instead of failing."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd or "--write-auto-sub" in cmd:
+            return MagicMock(
+                returncode=1,
+                stdout=b"",
+                stderr=b"HTTP Error 429: Too Many Requests",
+            )
+        # Last resort: audio download for Whisper must still be attempted.
+        assert "-f" in cmd
+        idx = cmd.index("--output")
+        out_dir = Path(cmd[idx + 1]).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "audio_abc.m4a").write_bytes(b"fake_audio")
+        return _ok()
+
+    mock_segments = [_make_segment(0.0, 2.5, "whisper fallback line")]
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(work_dir)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+        patch("app.whisper.WhisperModel") as mock_model_cls,
+    ):
+        mock_model_cls.return_value.transcribe.return_value = (mock_segments, None)
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=abc")
+
+    assert source == "whisper"
+    assert content == "whisper fallback line"
+
+
 def test_duplicate_caption_lines_collapsed(tmp_path: Path) -> None:
     """Rolling captions with consecutive repeated lines collapse to one line."""
     vtt_body = (
@@ -250,7 +312,7 @@ def test_unsupported_live_status_is_skipped(tmp_path: Path, live_status: str | N
 
 
 def test_ytdlp_failure_raises_clear_error(tmp_path: Path) -> None:
-    """A non-zero yt-dlp exit raises a clear error instead of a silent fallthrough."""
+    """When every strategy fails (incl. the last-resort audio download), it surfaces."""
 
     def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
         if _is_info_call(cmd):
