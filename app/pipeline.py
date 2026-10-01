@@ -2,7 +2,8 @@
 
 Always returns plain text. Live/upcoming broadcasts and videos not longer than
 60 seconds are rejected up front with a clear error instead of the old
-misleading "no subtitles" one.
+misleading "no subtitles" one. A failed subtitle download (e.g. YouTube HTTP
+429 rate limiting) falls back to the next strategy instead of failing the job.
 """
 
 import json
@@ -104,6 +105,40 @@ def _run(cmd: list[str], timeout: int) -> str:
     return result.stdout.decode("utf-8", "replace").strip()
 
 
+def _download_subtitles(video_url: str, out_base: str, sub_flag: str) -> list[Path]:
+    """Run one yt-dlp subtitle download and return the .vtt files it wrote.
+
+    A failed download (e.g. HTTP 429 rate limiting when YouTube rejects
+    non-impersonated requests) means "no subtitles from this source", not a
+    failed job: [] is returned so the caller falls back to the next strategy.
+    """
+    try:
+        _run(
+            [
+                "yt-dlp",
+                "--match-filter",
+                f"duration>{MIN_VIDEO_DURATION}",
+                sub_flag,
+                "--sub-langs",
+                settings.SUBTITLE_LANGS,
+                "--skip-download",
+                "--output",
+                out_base,
+                video_url,
+            ],
+            _SUBTITLE_TIMEOUT,
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "get_transcript.subtitle_download_failed",
+            video_url=video_url,
+            mode=sub_flag,
+            error=str(exc),
+        )
+        return []
+    return list(Path(out_base).parent.glob("*.vtt"))
+
+
 def _dedupe(lines: Iterable[str]) -> list[str]:
     """Keep non-empty lines, collapsing consecutive duplicates (rolling captions)."""
     out: list[str] = []
@@ -185,49 +220,20 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
     try:
         out_base = str(Path(temp_dir) / "subs")
 
-        # Try manual subtitles first.
+        # Try manual subtitles first; a failed download falls back to the next
+        # strategy instead of failing the job.
         logger.info("get_transcript.try_manual_subtitles", video_url=video_url)
-        _run(
-            [
-                "yt-dlp",
-                "--match-filter",
-                f"duration>{MIN_VIDEO_DURATION}",
-                "--write-sub",
-                "--sub-langs",
-                settings.SUBTITLE_LANGS,
-                "--skip-download",
-                "--output",
-                out_base,
-                video_url,
-            ],
-            _SUBTITLE_TIMEOUT,
-        )
-        vtt_files = list(Path(temp_dir).glob("*.vtt"))
-        if vtt_files:
+        manual_vtt = _download_subtitles(video_url, out_base, "--write-sub")
+        if manual_vtt:
             logger.info("get_transcript.manual_subtitles_found", video_url=video_url)
-            return ("manual", _vtt_to_plain_text(vtt_files[0].read_text()), metadata)
+            return ("manual", _vtt_to_plain_text(manual_vtt[0].read_text()), metadata)
 
         # Try auto-generated subtitles.
         logger.info("get_transcript.try_auto_subtitles", video_url=video_url)
-        _run(
-            [
-                "yt-dlp",
-                "--match-filter",
-                f"duration>{MIN_VIDEO_DURATION}",
-                "--write-auto-sub",
-                "--sub-langs",
-                settings.SUBTITLE_LANGS,
-                "--skip-download",
-                "--output",
-                out_base,
-                video_url,
-            ],
-            _SUBTITLE_TIMEOUT,
-        )
-        vtt_files = list(Path(temp_dir).glob("*.vtt"))
-        if vtt_files:
+        auto_vtt = _download_subtitles(video_url, out_base, "--write-auto-sub")
+        if auto_vtt:
             logger.info("get_transcript.auto_subtitles_found", video_url=video_url)
-            return ("auto", _vtt_to_plain_text(vtt_files[0].read_text()), metadata)
+            return ("auto", _vtt_to_plain_text(auto_vtt[0].read_text()), metadata)
 
         # Whisper fallback: download audio-only with yt-dlp, transcribe with faster-whisper.
         logger.info("get_transcript.whisper_fallback_start", video_url=video_url)
