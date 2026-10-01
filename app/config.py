@@ -9,8 +9,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Required: fail fast at startup when unset instead of serving a default key.
-    API_KEY: str
     REDIS_URL: str = "redis://localhost:6379/0"
     # Whisper model: size name (e.g. "base", "small") or path to local dir (e.g. "whisper-model", "./whisper-model")
     WHISPER_MODEL: str = "base"
@@ -41,7 +39,4 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_HEADERS: str | None = None
 
 
-# pydantic-settings fills required fields from the environment (or .env) at startup;
-# mypy's synthesized __init__ cannot see that, so its missing-argument error is a
-# false positive here. The value itself is validated by Settings on first use.
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

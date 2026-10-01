@@ -23,7 +23,7 @@
 #
 # Redis is external — not included in this Compose file. Set REDIS_URL (e.g.
 # redis://host.docker.internal:6379/0 for local Docker) in `.env` or the
-# environment. The API service also requires API_KEY.
+# environment.
 
 services:
   api:

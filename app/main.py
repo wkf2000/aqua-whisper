@@ -1,4 +1,4 @@
-"""FastAPI app with API key–protected routes."""
+"""FastAPI app: transcript submission API and unauthenticated web UI."""
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -6,12 +6,11 @@ from typing import Any
 from uuid import uuid4
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.auth import require_api_key
 from app.config import settings
 from app.db import get_stored_transcript, list_transcripts
 from app.logging_config import setup_logging
@@ -63,21 +62,12 @@ def _new_task_id(video_url: str) -> str:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    """Health check: returns 200 when API is up. No auth required."""
+    """Health check: returns 200 when API is up."""
     return {"status": "ok"}
 
 
-@app.get("/protected")
-def protected(_: None = Depends(require_api_key)) -> dict[str, bool]:
-    """Stub protected route for auth tests. Returns 200 with ok: true when auth passes."""
-    return {"ok": True}
-
-
 @app.post("/transcript", status_code=202)
-def transcript(
-    body: TranscriptRequest,
-    _: None = Depends(require_api_key),
-) -> dict[str, str]:
+def transcript(body: TranscriptRequest) -> dict[str, str]:
     """Accept video_url and webhook_url, enqueue transcript task, return 202 with task_id."""
     task_id = _new_task_id(body.video_url)
     run_transcript_pipeline.apply_async(

@@ -7,7 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Set env before importing app so pydantic-settings picks them up.
-os.environ.setdefault("API_KEY", "test-secret-key")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 from app import db

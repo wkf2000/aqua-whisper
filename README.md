@@ -8,8 +8,7 @@ Optionally generate and save a summary through an OpenAI-compatible LLM.
 - **POST /transcript** — Submit a YouTube URL and webhook URL; get a `task_id` immediately (202). No polling; the worker calls your webhook when done.
 - **Pipeline** — Tries manual subtitles → auto-generated subtitles → Whisper transcription. Always returns plain text. Subtitles are fetched for the language(s) in `SUBTITLE_LANGS` (default `en`); a failed subtitle download (e.g. YouTube HTTP 429 rate limiting) falls back to the next strategy instead of failing the job; only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store with their title, channel, duration, and upload date (videos already in the store are skipped; set `TRANSCRIPT_DEDUP=false` to re-transcribe).
 - **Summaries** — Set `summarize: true` to generate concise bullet points in the transcript's language using the official OpenAI Python SDK. Transcripts and summaries are saved to SQLite. The API defaults to transcript-only; the web UI requests and displays summaries.
-- **Web UI** — Unauthenticated single-page frontend at `/` with `/ui/transcript` submission and polling endpoints. In production it sits behind Cloudflare, which handles rate limiting and bot protection; the API endpoints remain API-key protected.
-- **Single API key** — Env-based auth; use `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+- **Web UI** — Single-page frontend at `/` with `/ui/transcript` submission, polling, and saved-transcript history. No auth; deploy behind a reverse proxy (e.g. Cloudflare) for rate limiting and bot protection.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
 
 ## Requirements
@@ -28,7 +27,6 @@ Optionally generate and save a summary through an OpenAI-compatible LLM.
 uv sync --all-extras
 
 # Set env
-export API_KEY=your-secret-key
 export REDIS_URL=redis://localhost:6379/0
 
 # For summaries (or set these in .env):
@@ -47,7 +45,7 @@ uv run celery -A app.celery_app worker --loglevel=info --concurrency=1 --pool=so
 ### Docker (API + worker)
 
 ```bash
-# Configure: copy the example env file and edit it (set API_KEY and REDIS_URL;
+# Configure: copy the example env file and edit it (set REDIS_URL;
 # for local Docker use redis://host.docker.internal:6379/0)
 cp .env.example .env
 
@@ -90,7 +88,7 @@ After changing `docker-compose.yaml` in this repo, copy it to the server as `doc
 | Endpoint           | Auth | Description |
 |--------------------|------|-------------|
 | `GET /health`      | No   | 200 when API is up |
-| `POST /transcript` | Yes  | Body: `video_url`, `webhook_url` (YouTube only), optional `author`, and optional `summarize` (default `false`). Returns 202 + `task_id`. |
+| `POST /transcript` | No   | Body: `video_url`, `webhook_url` (YouTube only), optional `author`, and optional `summarize` (default `false`). Returns 202 + `task_id`. |
 
 **Webhook (worker → you):** One POST when the job finishes. Payload: `task_id`, `author`, `status` (`"success"` \| `"failed"`), and on success `source` (`"manual"` \| `"auto"` \| `"whisper"`), `transcript` (plain text), and `summary` (plain text or null); on transcription failure `error`.
 
@@ -126,13 +124,12 @@ The repository also ships a small frontend (`static/index.html` for generating s
 | `GET /ui/history`       | No   | Lists saved transcripts with metadata and summary, but no transcript text. Query params: `q` (search title/channel/video id), `source` (`manual` \| `auto` \| `whisper`), `sort` (`newest` \| `oldest` \| `longest` \| `shortest` \| `title`), `limit` (1&ndash;200), `offset`. Returns `{items, total, limit, offset}`. |
 | `GET /ui/history/{video_id}` | No | One saved transcript with its metadata, full transcript, and summary. |
 
-These endpoints carry no API key by design. In production the frontend is served behind **Cloudflare**, which provides rate limiting and bot protection; the API (`/transcript`, `/protected`) is additionally protected by the shared API key.
+These endpoints carry no auth by design. In production the frontend is served behind **Cloudflare**, which provides rate limiting and bot protection; the API (`/transcript`) is intentionally also unauthenticated so it can be called directly.
 
 ## Environment
 
 | Variable     | Required | Description |
 |-------------|----------|-------------|
-| `API_KEY`   | Yes (API) | Shared secret for `POST /transcript` and `/protected`. Required: the app refuses to start without it. |
 | `REDIS_URL` | Yes      | Redis broker URL for Celery (e.g. `redis://localhost:6379/0`). |
 | `WHISPER_MODEL` | No   | Whisper model: size name (`base`, `small`, ...) or path to a local model dir. Default `base`. |
 | `WHISPER_COMPUTE_TYPE` | No | CTranslate2 compute type: `int8`, `float16`, `float32`, or `auto`. Default `auto`. |
@@ -142,7 +139,7 @@ These endpoints carry no API key by design. In production the frontend is served
 | `TRANSCRIPT_DEDUP` | No | Skip the pipeline when the video already has a saved transcript, whatever its age. Default `true`; `false` always re-runs and refreshes the stored row. |
 | `TRANSCRIPT_DB_PATH` | No | SQLite file for durable transcript storage. Default `./data/transcripts.db`; in Docker fixed to `/data/transcripts.db` via the `AQUA_WHISPER_DATA_DIR` bind mount. |
 | `LLM_BASE_URL` | For summaries | OpenAI-compatible API base URL including its API prefix, e.g. `https://api.openai.com/v1`. No default. |
-| `LLM_API_KEY` | For summaries | Bearer API key for the LLM service, separate from the app's `API_KEY`. No default. |
+| `LLM_API_KEY` | For summaries | Bearer API key for the LLM service. No default. |
 | `LLM_MODEL` | For summaries | Model name accepted by the configured LLM service. No default. |
 | `LLM_TIMEOUT_SECONDS` | No | Positive LLM request timeout in seconds. Default `120`; SDK retries are disabled. |
 | `ENV`       | No       | Environment label for logs/traces (e.g. `dev`, `prod`). |

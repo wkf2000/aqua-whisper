@@ -11,7 +11,7 @@ The service requires an asynchronous architecture to handle long-running video d
 
 | Topic | Decision |
 |-------|----------|
-| Auth | Single shared API key from env; validated per request |
+| Auth | None. `/transcript` and the UI endpoints are open; rate limiting/abuse protection is handled at the deployment boundary (e.g. reverse proxy). |
 | Webhook | One attempt only; no retries. Caller can resubmit if needed |
 | Whisper confirmation | None; worker always runs full pipeline (subs → Whisper fallback) |
 | Task status | Webhook-only delivery; no `GET /tasks/{id}` or result backend |
@@ -22,7 +22,7 @@ The service requires an asynchronous architecture to handle long-running video d
 
 ## 3. Architecture, Components, Deployment
 
-- **FastAPI app:** Validates API key and YouTube URL, enqueues a Celery task with `video_url` and `webhook_url`, returns generated `task_id`. No result backend.
+- **FastAPI app:** Validates the YouTube URL, enqueues a Celery task with `video_url` and `webhook_url`, returns generated `task_id`. No result backend.
 - **Celery worker:** Consumes tasks from Redis, runs transcript pipeline (yt-dlp → subs or Whisper), POSTs outcome to webhook once. Concurrency 1 or 2.
 - **Redis:** Existing instance; used as Celery broker only. Connection via config (e.g. `REDIS_URL`).
 - **Single Docker image:** One image contains FastAPI app, Celery worker code, yt-dlp, FFmpeg, and faster-whisper (or Whisper CLI). Two processes: API (e.g. uvicorn), worker (celery worker). Shared model volume optional.
@@ -33,9 +33,9 @@ The service requires an asynchronous architecture to handle long-running video d
 ### POST /transcript
 
 - **Request (JSON):** `video_url` (required, YouTube only), `webhook_url` (required).
-- **Auth:** `Authorization: Bearer <API_KEY>` or `X-API-Key: <API_KEY>`; key from env. Invalid/missing → 401.
+- **Auth:** None.
 - **Response (202 Accepted):** `{ "task_id": "<uuid>" }`.
-- **Errors:** 400 invalid/missing body or non-YouTube URL; 401 bad/missing API key; 503/500 if enqueue to Redis fails.
+- **Errors:** 400 invalid/missing body or non-YouTube URL; 503/500 if enqueue to Redis fails.
 
 ### Webhook POST (worker → caller)
 
@@ -52,10 +52,10 @@ The service requires an asynchronous architecture to handle long-running video d
 
 ## 6. Error Handling, Config, Testing
 
-- **API:** 400/401 as above; 503/500 on Redis enqueue failure.
+- **API:** 400/503/500 as above.
 - **Worker:** Catch pipeline exceptions; always POST webhook with status and error when failed; cleanup in try/finally. Webhook POST failure → log and drop (no retries). Optional Celery retries only for broker issues.
-- **Config (env):** `API_KEY`, `REDIS_URL`; worker: same Redis, optional `CELERY_CONCURRENCY`, temp path; optional `WHISPER_MODEL` (default `base`).
-- **Testing:** Unit tests for YouTube URL validation, request validation, 400/401, mocked Celery enqueue. Optional integration test with mock webhook and real YouTube URL (gated).
+- **Config (env):** `REDIS_URL`; worker: same Redis, optional `CELERY_CONCURRENCY`, temp path; optional `WHISPER_MODEL` (default `base`).
+- **Testing:** Unit tests for YouTube URL validation, request validation, 400, mocked Celery enqueue. Optional integration test with mock webhook and real YouTube URL (gated).
 
 ## 7. CI/CD (GitHub Actions)
 
