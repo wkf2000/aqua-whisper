@@ -1,5 +1,6 @@
 """Application config from environment."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,11 @@ class Settings(BaseSettings):
     TRANSCRIPT_DEDUP: bool = True
     # SQLite file for durable transcript storage
     TRANSCRIPT_DB_PATH: str = "./data/transcripts.db"
+    # OpenAI-compatible chat completions; optional for transcript-only requests.
+    LLM_BASE_URL: str = ""
+    LLM_API_KEY: str = ""
+    LLM_MODEL: str = ""
+    LLM_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0)
     # Observability
     ENV: str | None = None
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None

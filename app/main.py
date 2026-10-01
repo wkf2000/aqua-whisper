@@ -81,7 +81,7 @@ def transcript(
     """Accept video_url and webhook_url, enqueue transcript task, return 202 with task_id."""
     task_id = _new_task_id(body.video_url)
     run_transcript_pipeline.apply_async(
-        args=[task_id, body.video_url, body.webhook_url, body.author]
+        args=[task_id, body.video_url, body.webhook_url, body.author, body.summarize]
     )
     return {"task_id": task_id}
 
@@ -105,7 +105,7 @@ def ui_history_page() -> FileResponse:
 def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
     """Accept a YouTube URL, enqueue transcript task, return task_id."""
     task_id = _new_task_id(body.video_url)
-    run_transcript_pipeline_ui.apply_async(args=[task_id, body.video_url])
+    run_transcript_pipeline_ui.apply_async(args=[task_id, body.video_url, body.summarize])
     return {"task_id": task_id}
 
 

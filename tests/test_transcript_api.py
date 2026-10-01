@@ -3,6 +3,7 @@
 import os
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 # Set env before importing app so pydantic-settings picks them up.
@@ -41,6 +42,7 @@ def test_transcript_valid_body_and_youtube_and_api_key_returns_202_with_task_id(
         VALID_BODY["video_url"],
         VALID_BODY["webhook_url"],
         "unknown",
+        False,
     ]
 
 
@@ -116,3 +118,16 @@ def test_transcript_invalid_api_key_returns_401() -> None:
         headers={"X-API-Key": "wrong-key"},
     )
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("summarize", [True, False])
+def test_transcript_passes_summarize_flag_to_task(summarize: bool) -> None:
+    """The caller's summary preference is passed to the webhook task."""
+    with patch("app.main.run_transcript_pipeline.apply_async") as mock_apply:
+        response = client.post(
+            "/transcript",
+            json={**VALID_BODY, "summarize": summarize},
+            headers={"X-API-Key": "test-secret-key"},
+        )
+    assert response.status_code == 202
+    assert mock_apply.call_args.kwargs["args"][4] is summarize

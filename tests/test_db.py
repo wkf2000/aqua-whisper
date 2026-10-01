@@ -22,6 +22,20 @@ CREATE TABLE transcripts (
 )
 """
 
+_V2_SCHEMA = """
+CREATE TABLE transcripts (
+    video_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    title TEXT,
+    channel TEXT,
+    duration REAL,
+    upload_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 
 def _use_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the store at a fresh per-test database file (in a missing dir)."""
@@ -37,6 +51,7 @@ def test_save_and_get_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         _VIDEO_ID,
         "manual",
         "some text",
+        summary="- A summary",
         title="A Talk",
         channel="Some Channel",
         duration=300.0,
@@ -49,6 +64,7 @@ def test_save_and_get_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert row.video_id == _VIDEO_ID
     assert row.source == "manual"
     assert row.transcript == "some text"
+    assert row.summary == "- A summary"
     assert row.title == "A Talk"
     assert row.channel == "Some Channel"
     assert row.duration == 300.0
@@ -119,6 +135,100 @@ def test_migrates_v1_database_by_adding_metadata_columns(
     assert old_row.transcript == "old text"
     assert old_row.title is None
     assert old_row.duration is None
+    assert old_row.summary is None
+
+
+@pytest.mark.parametrize("schema", [_V1_SCHEMA, _V2_SCHEMA])
+def test_summary_migration_preserves_all_existing_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, schema: str
+) -> None:
+    """Adding summary leaves all old columns unchanged, including timestamps."""
+    path = _use_db(monkeypatch, tmp_path)
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(schema)
+        conn.execute(
+            "INSERT INTO transcripts (video_id, source, transcript, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (_VIDEO_ID, "manual", "original text", "2025-01-01 00:00:00", "2025-02-02 00:00:00"),
+        )
+        if schema == _V2_SCHEMA:
+            conn.execute(
+                "UPDATE transcripts SET title = 'Title', channel = 'Channel', duration = 300, "
+                "upload_date = '2025-01-01'"
+            )
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(transcripts)")]
+        before = conn.execute("SELECT * FROM transcripts").fetchall()
+
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.summary is None
+    rows, total = db.list_transcripts()
+    assert total == 1
+    assert rows[0].summary is None
+    with sqlite3.connect(path) as conn:
+        after = conn.execute(f"SELECT {', '.join(columns)} FROM transcripts").fetchall()
+    assert after == before
+
+
+@pytest.mark.parametrize("summary", ["- A summary", "error"])
+def test_save_summary_preserves_existing_fields_and_timestamps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, summary: str
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(
+        _VIDEO_ID,
+        "manual",
+        "original text",
+        title="Title",
+        channel="Channel",
+        duration=300,
+        upload_date="2025-01-01",
+    )
+    with sqlite3.connect(settings.TRANSCRIPT_DB_PATH) as conn:
+        conn.execute(
+            "UPDATE transcripts SET created_at = '2025-01-01 00:00:00', "
+            "updated_at = '2025-02-02 00:00:00'"
+        )
+    before = db.get_stored_transcript(_VIDEO_ID)
+    assert before is not None
+
+    db.save_summary(_VIDEO_ID, summary)
+
+    assert db.get_stored_transcript(_VIDEO_ID) == before._replace(summary=summary)
+
+
+def test_save_summary_does_not_replace_an_existing_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "text", summary="- Original summary")
+    before = db.get_stored_transcript(_VIDEO_ID)
+    db.save_summary(_VIDEO_ID, "- Replacement summary")
+    assert db.get_stored_transcript(_VIDEO_ID) == before
+
+
+def test_transcript_only_upsert_preserves_saved_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "first", summary="- Original summary")
+    db.save_transcript(_VIDEO_ID, "auto", "second")
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.transcript == "second"
+    assert row.summary == "- Original summary"
+
+
+def test_upsert_refreshes_summary_when_supplied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "first", summary="- Original summary")
+    db.save_transcript(_VIDEO_ID, "auto", "second", summary="- New summary")
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.summary == "- New summary"
 
 
 # Rows for listing tests: video_id, source, title, channel, duration, upload_date.

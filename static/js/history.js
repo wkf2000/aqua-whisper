@@ -42,7 +42,6 @@ function formatDuration(seconds) {
 let offset = 0;
 let total = 0;
 let requestSeq = 0; // Guards against stale responses overwriting newer ones.
-const transcripts = new Map(); // video_id -> transcript text
 let searchTimer = null;
 
 function hasFilters() {
@@ -85,8 +84,8 @@ function render(items) {
 
   if (total === 0) {
     $empty.textContent = hasFilters()
-      ? 'No transcripts match these filters.'
-      : 'No saved transcripts yet \u2014 transcribe a video first.';
+      ? 'No saved videos match these filters.'
+      : 'No saved videos yet \u2014 summarize a video first.';
     show($empty);
     return;
   }
@@ -112,55 +111,31 @@ function rowHtml(item) {
   const channel = item.channel
     ? `<div class="text-xs text-muted mt-0.5">${escapeHtml(item.channel)}</div>`
     : '';
+  const summary = escapeHtml(item.summary ?? 'No summary available');
   return `
     <tr class="border-t border-slate-700 cursor-pointer hover:bg-surface/60 transition-colors duration-150" data-vid="${escapeHtml(item.video_id)}">
       <td class="py-2.5 pr-4 align-top">
         <div class="font-medium">${title}</div>
         ${channel}
       </td>
+      <td class="py-2.5 pr-4 align-top"><div class="line-clamp-3 whitespace-pre-wrap min-w-[16rem] max-w-sm">${summary}</div></td>
       <td class="py-2.5 pr-4 align-top"><span class="text-xs text-muted bg-surface px-2 py-0.5 rounded">${escapeHtml(item.source)}</span></td>
       <td class="py-2.5 pr-4 align-top text-muted whitespace-nowrap">${escapeHtml(formatDuration(item.duration))}</td>
       <td class="py-2.5 pr-4 align-top text-muted whitespace-nowrap">${escapeHtml(item.upload_date || '\u2014')}</td>
       <td class="py-2.5 align-top text-muted whitespace-nowrap">${escapeHtml(item.created_at ? item.created_at.slice(0, 10) : '')}</td>
     </tr>
     <tr class="hidden" data-detail="${escapeHtml(item.video_id)}">
-      <td colspan="5" class="pb-4">
-        <div class="flex items-center gap-2">
-          <div class="spinner" style="width:16px;height:16px;border-width:2px;"></div>
-          <span class="text-muted text-xs">Loading transcript&hellip;</span>
-        </div>
+      <td colspan="6" class="pb-4">
+        <pre class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700">${summary}</pre>
       </td>
     </tr>`;
 }
 
-async function toggleDetail(videoId) {
+function toggleDetail(videoId) {
   const detailRow = $rows.querySelector(`[data-detail="${CSS.escape(videoId)}"]`);
   if (!detailRow) return;
 
-  if (!detailRow.classList.contains('hidden')) {
-    detailRow.classList.add('hidden');
-    return;
-  }
-  detailRow.classList.remove('hidden');
-
-  if (transcripts.has(videoId)) {
-    fillDetail(detailRow, transcripts.get(videoId));
-    return;
-  }
-  try {
-    const response = await fetch(`/ui/history/${encodeURIComponent(videoId)}`);
-    if (!response.ok) throw new Error(`Request failed (${response.status})`);
-    const data = await response.json();
-    transcripts.set(videoId, data.transcript);
-    fillDetail(detailRow, data.transcript);
-  } catch {
-    fillDetail(detailRow, 'Failed to load transcript.');
-  }
-}
-
-function fillDetail(detailRow, text) {
-  detailRow.querySelector('td').innerHTML = `
-    <pre class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700">${escapeHtml(text)}</pre>`;
+  detailRow.classList.toggle('hidden');
 }
 
 $rows.addEventListener('click', (event) => {

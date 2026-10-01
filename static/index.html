@@ -17,9 +17,9 @@
   <main class="w-full max-w-2xl">
     <div class="text-center mb-10">
       <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight">Aqua Whisper</h1>
-      <p class="mt-2 text-muted text-sm sm:text-base">Paste a YouTube URL to get its transcript</p>
+      <p class="mt-2 text-muted text-sm sm:text-base">Paste a YouTube URL to get its summary</p>
       <p class="mt-2">
-        <a href="/history" class="text-accent text-sm hover:text-emerald-400 transition-colors duration-200">View saved transcripts &rarr;</a>
+        <a href="/history" class="text-accent text-sm hover:text-emerald-400 transition-colors duration-200">View saved videos &rarr;</a>
       </p>
     </div>
 
@@ -36,13 +36,13 @@
         type="submit"
         class="h-10 px-5 rounded-lg bg-accent text-bg font-medium cursor-pointer hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        Transcribe
+        Summarize
       </button>
     </form>
 
     <div id="status" class="mt-6 flex items-center gap-3 hidden">
       <div class="spinner"></div>
-      <span class="text-muted text-sm">Processing transcript&hellip;</span>
+      <span class="text-muted text-sm">Transcribing and generating summary&hellip;</span>
     </div>
 
     <div id="error" class="mt-6 hidden">
@@ -51,7 +51,7 @@
 
     <div id="result" class="mt-6 hidden">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs text-muted uppercase tracking-wide font-medium">Transcript</span>
+        <span class="text-xs text-muted uppercase tracking-wide font-medium">Summary</span>
         <div class="flex items-center gap-2">
           <span id="source-badge" class="text-xs text-muted bg-surface px-2 py-0.5 rounded"></span>
           <button
@@ -61,7 +61,7 @@
           >Copy</button>
         </div>
       </div>
-      <pre id="transcript-text" class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700"></pre>
+      <pre id="summary-text" class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700"></pre>
     </div>
   </main>
 

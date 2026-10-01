@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS transcripts (
     video_id   TEXT PRIMARY KEY,
     source     TEXT NOT NULL,
     transcript TEXT NOT NULL,
+    summary    TEXT,
     title      TEXT,
     channel    TEXT,
     duration   REAL,
@@ -36,6 +37,7 @@ _MIGRATIONS = (
     ("channel", "ALTER TABLE transcripts ADD COLUMN channel TEXT"),
     ("duration", "ALTER TABLE transcripts ADD COLUMN duration REAL"),
     ("upload_date", "ALTER TABLE transcripts ADD COLUMN upload_date TEXT"),
+    ("summary", "ALTER TABLE transcripts ADD COLUMN summary TEXT"),
 )
 
 
@@ -45,6 +47,7 @@ class StoredTranscript(NamedTuple):
     video_id: str
     source: str
     transcript: str
+    summary: str | None
     title: str | None
     channel: str | None
     duration: float | None
@@ -84,28 +87,39 @@ def save_transcript(
     source: str,
     transcript: str,
     *,
+    summary: str | None = None,
     title: str | None = None,
     channel: str | None = None,
     duration: float | None = None,
     upload_date: str | None = None,
 ) -> None:
-    """Store the transcript and video metadata, refreshing the row if it exists."""
+    """Store a transcript and metadata, preserving a saved summary when none is supplied."""
     with closing(_connect()) as conn, conn:
         conn.execute(
             """
             INSERT INTO transcripts
-                (video_id, source, transcript, title, channel, duration, upload_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (video_id, source, transcript, summary, title, channel, duration, upload_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
                 source = excluded.source,
                 transcript = excluded.transcript,
+                summary = COALESCE(excluded.summary, transcripts.summary),
                 title = excluded.title,
                 channel = excluded.channel,
                 duration = excluded.duration,
                 upload_date = excluded.upload_date,
                 updated_at = datetime('now')
             """,
-            (video_id, source, transcript, title, channel, duration, upload_date),
+            (video_id, source, transcript, summary, title, channel, duration, upload_date),
+        )
+
+
+def save_summary(video_id: str, summary: str) -> None:
+    """Fill a missing summary without changing existing fields or timestamps."""
+    with closing(_connect()) as conn, conn:
+        conn.execute(
+            "UPDATE transcripts SET summary = ? WHERE video_id = ? AND summary IS NULL",
+            (summary, video_id),
         )
 
 
@@ -114,7 +128,7 @@ def get_stored_transcript(video_id: str) -> StoredTranscript | None:
     with closing(_connect()) as conn:
         row = conn.execute(
             """
-            SELECT video_id, source, transcript, title, channel, duration, upload_date,
+            SELECT video_id, source, transcript, summary, title, channel, duration, upload_date,
                    created_at, updated_at
             FROM transcripts WHERE video_id = ?
             """,
@@ -130,6 +144,7 @@ class StoredSummary(NamedTuple):
 
     video_id: str
     source: str
+    summary: str | None
     title: str | None
     channel: str | None
     duration: float | None
@@ -183,7 +198,7 @@ def list_transcripts(
         total = conn.execute(f"SELECT COUNT(*) FROM transcripts {where_sql}", params).fetchone()[0]
         rows = conn.execute(
             f"""
-            SELECT video_id, source, title, channel, duration, upload_date,
+            SELECT video_id, source, summary, title, channel, duration, upload_date,
                    created_at, updated_at
             FROM transcripts {where_sql}
             ORDER BY {order_sql}

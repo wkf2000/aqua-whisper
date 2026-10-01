@@ -37,7 +37,9 @@ def test_history_empty_store_returns_no_items(
 def test_history_lists_saved_transcripts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Saved rows are listed with metadata and without the transcript text."""
     _use_db(monkeypatch, tmp_path)
-    db.save_transcript("vid11111111", "manual", "some text", title="Alpha", channel="Chan")
+    db.save_transcript(
+        "vid11111111", "manual", "some text", summary="- Summary", title="Alpha", channel="Chan"
+    )
 
     res = client.get("/ui/history")
 
@@ -49,6 +51,7 @@ def test_history_lists_saved_transcripts(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert item["title"] == "Alpha"
     assert item["channel"] == "Chan"
     assert item["source"] == "manual"
+    assert item["summary"] == "- Summary"
     assert "transcript" not in item
 
 
@@ -103,13 +106,14 @@ def test_history_rejects_huge_offset(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 def test_history_detail_returns_transcript(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The detail endpoint returns the full stored transcript with metadata."""
     _use_db(monkeypatch, tmp_path)
-    db.save_transcript("vid11111111", "manual", "the text", title="Alpha")
+    db.save_transcript("vid11111111", "manual", "the text", summary="- Summary", title="Alpha")
 
     res = client.get("/ui/history/vid11111111")
 
     assert res.status_code == 200
     data = res.json()
     assert data["transcript"] == "the text"
+    assert data["summary"] == "- Summary"
     assert data["title"] == "Alpha"
 
 
@@ -124,3 +128,16 @@ def test_history_page_is_served() -> None:
     res = client.get("/history")
     assert res.status_code == 200
     assert "History" in res.text
+
+
+@pytest.mark.parametrize("summary", [None, "error"])
+def test_history_includes_missing_and_failed_summaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, summary: str | None
+) -> None:
+    """Absent summaries and LLM failures remain visible in list and detail responses."""
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript("vid11111111", "manual", "the text", summary=summary)
+    assert client.get("/ui/history").json()["items"][0]["summary"] == summary
+    detail = client.get("/ui/history/vid11111111").json()
+    assert detail["summary"] == summary
+    assert detail["transcript"] == "the text"

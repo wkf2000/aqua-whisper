@@ -18,6 +18,7 @@ dependencies = [
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
     "yt-dlp-ejs>=0.8.0",
+    "openai>=3.22.1",
 ]
 
 [project.optional-dependencies]
