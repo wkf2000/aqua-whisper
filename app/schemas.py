@@ -9,9 +9,11 @@ class TranscriptRequest(BaseModel):
     video_url: str
     webhook_url: str
     author: str = "unknown"
+    summarize: bool = False
 
 
 class UITranscriptRequest(BaseModel):
     """Request body for POST /ui/transcript (no webhook, no auth)."""
 
     video_url: str
+    summarize: bool = False

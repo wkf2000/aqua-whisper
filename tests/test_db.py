@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from app import db
 from app.config import settings
 
@@ -20,21 +22,36 @@ CREATE TABLE transcripts (
 )
 """
 
+_V2_SCHEMA = """
+CREATE TABLE transcripts (
+    video_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    transcript TEXT NOT NULL,
+    title TEXT,
+    channel TEXT,
+    duration REAL,
+    upload_date TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
 
-def _use_db(monkeypatch, tmp_path) -> Path:
+
+def _use_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the store at a fresh per-test database file (in a missing dir)."""
     path = tmp_path / "data" / "transcripts.db"
     monkeypatch.setattr(settings, "TRANSCRIPT_DB_PATH", str(path))
     return path
 
 
-def test_save_and_get_roundtrip(monkeypatch, tmp_path) -> None:
+def test_save_and_get_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A saved transcript is returned by get_stored_transcript with its metadata."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript(
         _VIDEO_ID,
         "manual",
         "some text",
+        summary="- A summary",
         title="A Talk",
         channel="Some Channel",
         duration=300.0,
@@ -47,6 +64,7 @@ def test_save_and_get_roundtrip(monkeypatch, tmp_path) -> None:
     assert row.video_id == _VIDEO_ID
     assert row.source == "manual"
     assert row.transcript == "some text"
+    assert row.summary == "- A summary"
     assert row.title == "A Talk"
     assert row.channel == "Some Channel"
     assert row.duration == 300.0
@@ -55,13 +73,15 @@ def test_save_and_get_roundtrip(monkeypatch, tmp_path) -> None:
     assert datetime.now(timezone.utc) - updated < timedelta(minutes=1)
 
 
-def test_get_unknown_video_returns_none(monkeypatch, tmp_path) -> None:
+def test_get_unknown_video_returns_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Nothing is stored for an unknown video id."""
     _use_db(monkeypatch, tmp_path)
     assert db.get_stored_transcript("missing00000") is None
 
 
-def test_save_upsert_refreshes_existing_row(monkeypatch, tmp_path) -> None:
+def test_save_upsert_refreshes_existing_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Re-saving a video id refreshes its row instead of creating a second one."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript(_VIDEO_ID, "manual", "first", title="First Title")
@@ -76,7 +96,7 @@ def test_save_upsert_refreshes_existing_row(monkeypatch, tmp_path) -> None:
     assert row.channel == "C"
 
 
-def test_creates_parent_directories(monkeypatch, tmp_path) -> None:
+def test_creates_parent_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The store creates missing parent directories for the database file."""
     path = _use_db(monkeypatch, tmp_path)
 
@@ -85,7 +105,9 @@ def test_creates_parent_directories(monkeypatch, tmp_path) -> None:
     assert path.exists()
 
 
-def test_migrates_v1_database_by_adding_metadata_columns(monkeypatch, tmp_path) -> None:
+def test_migrates_v1_database_by_adding_metadata_columns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A database created before metadata columns existed is upgraded on connect."""
     path = _use_db(monkeypatch, tmp_path)
     path.parent.mkdir(parents=True)
@@ -113,6 +135,100 @@ def test_migrates_v1_database_by_adding_metadata_columns(monkeypatch, tmp_path) 
     assert old_row.transcript == "old text"
     assert old_row.title is None
     assert old_row.duration is None
+    assert old_row.summary is None
+
+
+@pytest.mark.parametrize("schema", [_V1_SCHEMA, _V2_SCHEMA])
+def test_summary_migration_preserves_all_existing_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, schema: str
+) -> None:
+    """Adding summary leaves all old columns unchanged, including timestamps."""
+    path = _use_db(monkeypatch, tmp_path)
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(schema)
+        conn.execute(
+            "INSERT INTO transcripts (video_id, source, transcript, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (_VIDEO_ID, "manual", "original text", "2025-01-01 00:00:00", "2025-02-02 00:00:00"),
+        )
+        if schema == _V2_SCHEMA:
+            conn.execute(
+                "UPDATE transcripts SET title = 'Title', channel = 'Channel', duration = 300, "
+                "upload_date = '2025-01-01'"
+            )
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(transcripts)")]
+        before = conn.execute("SELECT * FROM transcripts").fetchall()
+
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.summary is None
+    rows, total = db.list_transcripts()
+    assert total == 1
+    assert rows[0].summary is None
+    with sqlite3.connect(path) as conn:
+        after = conn.execute(f"SELECT {', '.join(columns)} FROM transcripts").fetchall()
+    assert after == before
+
+
+@pytest.mark.parametrize("summary", ["- A summary", "error"])
+def test_save_summary_preserves_existing_fields_and_timestamps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, summary: str
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(
+        _VIDEO_ID,
+        "manual",
+        "original text",
+        title="Title",
+        channel="Channel",
+        duration=300,
+        upload_date="2025-01-01",
+    )
+    with sqlite3.connect(settings.TRANSCRIPT_DB_PATH) as conn:
+        conn.execute(
+            "UPDATE transcripts SET created_at = '2025-01-01 00:00:00', "
+            "updated_at = '2025-02-02 00:00:00'"
+        )
+    before = db.get_stored_transcript(_VIDEO_ID)
+    assert before is not None
+
+    db.save_summary(_VIDEO_ID, summary)
+
+    assert db.get_stored_transcript(_VIDEO_ID) == before._replace(summary=summary)
+
+
+def test_save_summary_does_not_replace_an_existing_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "text", summary="- Original summary")
+    before = db.get_stored_transcript(_VIDEO_ID)
+    db.save_summary(_VIDEO_ID, "- Replacement summary")
+    assert db.get_stored_transcript(_VIDEO_ID) == before
+
+
+def test_transcript_only_upsert_preserves_saved_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "first", summary="- Original summary")
+    db.save_transcript(_VIDEO_ID, "auto", "second")
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.transcript == "second"
+    assert row.summary == "- Original summary"
+
+
+def test_upsert_refreshes_summary_when_supplied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _use_db(monkeypatch, tmp_path)
+    db.save_transcript(_VIDEO_ID, "manual", "first", summary="- Original summary")
+    db.save_transcript(_VIDEO_ID, "auto", "second", summary="- New summary")
+    row = db.get_stored_transcript(_VIDEO_ID)
+    assert row is not None
+    assert row.summary == "- New summary"
 
 
 # Rows for listing tests: video_id, source, title, channel, duration, upload_date.
@@ -123,7 +239,7 @@ _SEED_ROWS = (
 )
 
 
-def _seed_listing(monkeypatch, tmp_path) -> None:
+def _seed_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Seed three rows with distinct created_at values (vid3 newest, vid1 oldest)."""
     _use_db(monkeypatch, tmp_path)
     for video_id, source, title, channel, duration, upload_date in _SEED_ROWS:
@@ -146,7 +262,9 @@ def _seed_listing(monkeypatch, tmp_path) -> None:
     conn.close()
 
 
-def test_list_returns_all_newest_first_with_total(monkeypatch, tmp_path) -> None:
+def test_list_returns_all_newest_first_with_total(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Default listing is newest first and reports the full total."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts()
@@ -158,7 +276,9 @@ def test_list_returns_all_newest_first_with_total(monkeypatch, tmp_path) -> None
     assert rows[0].upload_date == "2026-03-01"
 
 
-def test_list_search_matches_title_channel_and_video_id(monkeypatch, tmp_path) -> None:
+def test_list_search_matches_title_channel_and_video_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """q matches title (case-insensitive), channel, and video id."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(q="beta")
@@ -172,7 +292,9 @@ def test_list_search_matches_title_channel_and_video_id(monkeypatch, tmp_path) -
     assert rows[0].video_id == "vid33333333"
 
 
-def test_list_search_escapes_like_wildcards(monkeypatch, tmp_path) -> None:
+def test_list_search_escapes_like_wildcards(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Literal % and _ in the query do not act as LIKE wildcards."""
     _use_db(monkeypatch, tmp_path)
     db.save_transcript("vid44444444", "manual", "text", title="100% certain")
@@ -186,7 +308,9 @@ def test_list_search_escapes_like_wildcards(monkeypatch, tmp_path) -> None:
     assert db.list_transcripts(q="Beta")[1] == 1
 
 
-def test_list_source_filter_combines_with_search(monkeypatch, tmp_path) -> None:
+def test_list_source_filter_combines_with_search(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The source filter narrows the search results."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(source="whisper")
@@ -197,7 +321,7 @@ def test_list_source_filter_combines_with_search(monkeypatch, tmp_path) -> None:
     assert rows[0].video_id == "vid33333333"
 
 
-def test_list_sort_orders(monkeypatch, tmp_path) -> None:
+def test_list_sort_orders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Whitelisted sorts order by age, duration, and title."""
     _seed_listing(monkeypatch, tmp_path)
     assert [r.video_id for r in db.list_transcripts(sort="oldest")[0]] == [
@@ -222,7 +346,7 @@ def test_list_sort_orders(monkeypatch, tmp_path) -> None:
     ]
 
 
-def test_list_sort_null_duration_last(monkeypatch, tmp_path) -> None:
+def test_list_sort_null_duration_last(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Rows without duration (saved before metadata) sort last in duration sorts."""
     _seed_listing(monkeypatch, tmp_path)
     db.save_transcript("vid77777777", "manual", "no metadata")
@@ -233,7 +357,7 @@ def test_list_sort_null_duration_last(monkeypatch, tmp_path) -> None:
         assert rows[-1].video_id == "vid77777777"
 
 
-def test_list_sort_null_title_last(monkeypatch, tmp_path) -> None:
+def test_list_sort_null_title_last(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Rows without a title (saved before metadata) sort last in the title sort."""
     _seed_listing(monkeypatch, tmp_path)
     db.save_transcript("vid77777777", "manual", "no metadata")
@@ -245,7 +369,7 @@ def test_list_sort_null_title_last(monkeypatch, tmp_path) -> None:
     assert rows[-1].video_id == "vid77777777"
 
 
-def test_list_pagination(monkeypatch, tmp_path) -> None:
+def test_list_pagination(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """limit/offset page through results while total stays the full count."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(limit=2, offset=0)
@@ -257,7 +381,9 @@ def test_list_pagination(monkeypatch, tmp_path) -> None:
     assert [r.video_id for r in rows] == ["vid11111111"]
 
 
-def test_list_unknown_sort_falls_back_to_newest(monkeypatch, tmp_path) -> None:
+def test_list_unknown_sort_falls_back_to_newest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Sort keys outside the whitelist fall back to newest; nothing is interpolated."""
     _seed_listing(monkeypatch, tmp_path)
     rows, total = db.list_transcripts(sort="newest; DROP TABLE transcripts")

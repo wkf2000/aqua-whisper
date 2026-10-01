@@ -9,7 +9,7 @@ const $btn = document.getElementById('submit-btn');
 const $status = document.getElementById('status');
 const $error = document.getElementById('error');
 const $result = document.getElementById('result');
-const $text = document.getElementById('transcript-text');
+const $text = document.getElementById('summary-text');
 const $source = document.getElementById('source-badge');
 const $copyBtn = document.getElementById('copy-btn');
 
@@ -88,7 +88,7 @@ async function handleSubmit(event) {
     const response = await fetch('/ui/transcript', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ video_url: url }),
+      body: JSON.stringify({ video_url: url, summarize: true }),
     });
 
     if (!response.ok) {
@@ -112,7 +112,7 @@ function pollResult(taskId) {
     if (Date.now() - start > POLL_TIMEOUT) {
       clearInterval(timer);
       hide($status);
-      setError($error, 'Timed out waiting for transcript. Please try again.');
+      setError($error, 'Timed out waiting for summary. Please try again.');
       $btn.disabled = false;
       return;
     }
@@ -128,7 +128,7 @@ function pollResult(taskId) {
 
       if (data.status === 'success') {
         resetCopyButton();
-        $text.textContent = data.transcript;
+        $text.textContent = data.summary ?? 'No summary available';
         $source.textContent = `source: ${data.source}`;
         show($result);
       } else {

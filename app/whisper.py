@@ -1,6 +1,7 @@
 """faster-whisper model: loaded once per worker process and reused across tasks."""
 
 from pathlib import Path
+from typing import Any
 
 import structlog
 from faster_whisper import WhisperModel
@@ -12,7 +13,7 @@ logger = structlog.get_logger()
 _model: WhisperModel | None = None
 
 
-def _resolve_model(model_path_or_name: str) -> tuple[str, dict]:
+def _resolve_model(model_path_or_name: str) -> tuple[str, dict[str, Any]]:
     """Return (model path or size name, kwargs) for WHISPER_MODEL.
 
     A local directory containing model.bin is loaded with local_files_only;
@@ -24,7 +25,7 @@ def _resolve_model(model_path_or_name: str) -> tuple[str, dict]:
         if not Path(model_path_or_name).is_absolute()
         else Path(model_path_or_name)
     )
-    model_kwargs: dict = {"compute_type": settings.WHISPER_COMPUTE_TYPE}
+    model_kwargs: dict[str, Any] = {"compute_type": settings.WHISPER_COMPUTE_TYPE}
     if resolved_path.is_dir() and (resolved_path / "model.bin").exists():
         model_kwargs["local_files_only"] = True
         return str(resolved_path), model_kwargs

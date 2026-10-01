@@ -18,10 +18,12 @@ dependencies = [
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp",
     "yt-dlp-ejs>=0.8.0",
+    "openai>=3.22.1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "mypy",
     "pytest",
     "pytest-asyncio",
     "ruff",
@@ -38,6 +40,21 @@ packages = ["app"]
 target-version = "py313"
 line-length = 100
 extend-exclude = [".cursor"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["app", "tests"]
+
+# celery and faster-whisper do not ship py.typed markers; treat their imports as Any.
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*", "faster_whisper", "faster_whisper.*"]
+ignore_missing_imports = true
+
+# Celery's untyped @task decorator would otherwise mark every task function untyped.
+[[tool.mypy.overrides]]
+module = "app.tasks"
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

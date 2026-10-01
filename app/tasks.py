@@ -6,41 +6,56 @@ from opentelemetry import trace
 
 from app.celery_app import celery_app
 from app.config import settings
-from app.db import get_stored_transcript, save_transcript
+from app.db import get_stored_transcript, save_summary, save_transcript
 from app.pipeline import get_transcript
 from app.store import save_task_result
+from app.summary import generate_summary
 from app.youtube import extract_video_id
 
 logger = structlog.get_logger()
 tracer = trace.get_tracer(__name__)
 
 
-def _transcript_with_dedup(video_url: str) -> tuple[str, str]:
-    """Return (source, transcript), skipping videos already in the store when enabled."""
+def _transcript_with_dedup(video_url: str, summarize: bool = False) -> tuple[str, str, str | None]:
+    """Return source, transcript, and optional summary, reusing stored results."""
     video_id = extract_video_id(video_url)
-    if video_id and settings.TRANSCRIPT_DEDUP:
+    stored = None
+    # Even when re-transcribing, a transcript-only request returns any saved summary.
+    if video_id and (settings.TRANSCRIPT_DEDUP or not summarize):
         try:
             stored = get_stored_transcript(video_id)
         except Exception:
             # A store failure must not fail the job; fall through to the pipeline.
             logger.warning("transcript_store.read_failed", video_url=video_url, video_id=video_id)
             stored = None
-        if stored is not None:
+        if stored is not None and settings.TRANSCRIPT_DEDUP:
             logger.info(
                 "transcript_store.hit",
                 video_url=video_url,
                 video_id=video_id,
                 source=stored.source,
             )
-            return stored.source, stored.transcript
-        logger.info("transcript_store.miss", video_url=video_url, video_id=video_id)
+            summary = stored.summary
+            if summarize and summary is None:
+                summary = generate_summary(stored.transcript)
+                try:
+                    save_summary(video_id, summary)
+                except Exception:
+                    logger.warning("transcript_store.write_failed", video_id=video_id)
+            return stored.source, stored.transcript, summary
+        if stored is None:
+            logger.info("transcript_store.miss", video_url=video_url, video_id=video_id)
     source, transcript, metadata = get_transcript(video_url)
+    summary = stored.summary if stored else None
+    if summarize:
+        summary = generate_summary(transcript)
     if video_id:
         try:
             save_transcript(
                 video_id,
                 source,
                 transcript,
+                summary=summary,
                 title=metadata.title,
                 channel=metadata.channel,
                 duration=metadata.duration,
@@ -48,12 +63,16 @@ def _transcript_with_dedup(video_url: str) -> tuple[str, str]:
             )
         except Exception:
             logger.warning("transcript_store.write_failed", video_url=video_url, video_id=video_id)
-    return source, transcript
+    return source, transcript, summary
 
 
 @celery_app.task
 def run_transcript_pipeline(
-    task_id: str, video_url: str, webhook_url: str, author: str = "unknown"
+    task_id: str,
+    video_url: str,
+    webhook_url: str,
+    author: str = "unknown",
+    summarize: bool = False,
 ) -> None:
     """Run transcript pipeline for video_url and POST result to webhook_url."""
     with tracer.start_as_current_span("run_transcript_pipeline") as span:
@@ -70,12 +89,13 @@ def run_transcript_pipeline(
             author=author,
         )
         try:
-            source, transcript = _transcript_with_dedup(video_url)
+            source, transcript, summary = _transcript_with_dedup(video_url, summarize)
             payload = {
                 "task_id": task_id,
                 "status": "success",
                 "source": source,
                 "transcript": transcript,
+                "summary": summary,
                 "author": author,
             }
             logger.info(
@@ -104,7 +124,7 @@ def run_transcript_pipeline(
 
 
 @celery_app.task
-def run_transcript_pipeline_ui(task_id: str, video_url: str) -> None:
+def run_transcript_pipeline_ui(task_id: str, video_url: str, summarize: bool = False) -> None:
     """Run transcript pipeline and store result in Redis for frontend polling."""
     with tracer.start_as_current_span("run_transcript_pipeline_ui") as span:
         span.set_attribute("task.id", task_id)
@@ -116,11 +136,12 @@ def run_transcript_pipeline_ui(task_id: str, video_url: str) -> None:
             video_url=video_url,
         )
         try:
-            source, transcript = _transcript_with_dedup(video_url)
+            source, transcript, summary = _transcript_with_dedup(video_url, summarize)
             payload = {
                 "status": "success",
                 "source": source,
                 "transcript": transcript,
+                "summary": summary,
             }
             logger.info(
                 "run_transcript_pipeline_ui.success",
