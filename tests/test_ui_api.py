@@ -45,3 +45,10 @@ def test_ui_pending_result_can_carry_stage() -> None:
     ):
         response = client.get("/ui/transcript/task-id")
     assert response.json() == {"status": "pending", "stage": "summarizing"}
+
+
+def test_ui_index_page_serves_stage_list() -> None:
+    """The main page ships the container the progress checklist renders into."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'id="stage-list"' in response.text

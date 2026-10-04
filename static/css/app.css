@@ -1,4 +1,4 @@
-/* Shared page chrome: the loading spinner used by both pages. */
+/* Shared page chrome: loading spinners used by both pages. */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -11,6 +11,16 @@
   animation: spin 0.8s linear infinite;
 }
 
+/* Inline variant for the stage checklist on the main page. */
+.spinner-sm {
+  width: 14px; height: 14px;
+  border: 2px solid #334155;
+  border-top-color: #22C55E;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2s; }
+  .spinner-sm { animation-duration: 2s; }
 }

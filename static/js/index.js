@@ -3,35 +3,92 @@ import { hide, setError, show } from './ui.js';
 const POLL_INTERVAL = 3000;
 const POLL_TIMEOUT = 5 * 60 * 1000;
 
-const DEFAULT_STATUS_MESSAGE = 'Transcribing and generating summary…';
-const STAGE_MESSAGES = {
-  checking_saved: 'Checking saved videos…',
-  downloading_subtitles: 'Downloading subtitles…',
-  downloading_audio: 'Downloading audio…',
-  transcribing_audio: 'Transcribing audio…',
-  summarizing: 'Generating summary…',
-};
+const STAGES = [
+  { key: 'checking_saved', label: 'Checking saved videos' },
+  { key: 'downloading_subtitles', label: 'Downloading subtitles' },
+  { key: 'downloading_audio', label: 'Downloading audio' },
+  { key: 'transcribing_audio', label: 'Transcribing audio' },
+  { key: 'summarizing', label: 'Generating summary' },
+];
 
 const $form = document.getElementById('form');
 const $input = document.getElementById('url-input');
 const $btn = document.getElementById('submit-btn');
 const $status = document.getElementById('status');
-const $statusText = document.getElementById('status-text');
+const $stageList = document.getElementById('stage-list');
 const $error = document.getElementById('error');
 const $result = document.getElementById('result');
 const $text = document.getElementById('summary-text');
 const $source = document.getElementById('source-badge');
 const $copyBtn = document.getElementById('copy-btn');
 
-function setStatusMessage(message) {
-  $statusText.textContent = message;
+const $spinner = document.createElement('div');
+$spinner.className = 'spinner-sm';
+
+const stageItems = STAGES.map((stage) => {
+  const item = document.createElement('li');
+  item.className = 'flex items-center gap-3';
+
+  const icon = document.createElement('span');
+  icon.className = 'w-4 flex justify-center shrink-0';
+
+  const label = document.createElement('span');
+  label.textContent = stage.label;
+
+  const note = document.createElement('span');
+  note.className = 'text-xs text-muted/50';
+
+  item.append(icon, label, note);
+  return { item, icon, label, note };
+});
+
+$stageList.replaceChildren(...stageItems.map(({ item }) => item));
+
+// Stage states: 'pending', 'active', 'done', or 'skipped'.
+let stageStates = STAGES.map(() => 'pending');
+
+function resetStages() {
+  // The first stage is active from the start: the task always begins there.
+  stageStates = STAGES.map((_stage, index) => (index === 0 ? 'active' : 'pending'));
+  renderStages();
+}
+
+function setActiveStage(stageKey) {
+  const activeIndex = STAGES.findIndex((stage) => stage.key === stageKey);
+  if (activeIndex === -1) return; // Unknown stage: keep the current display.
+
+  stageStates = stageStates.map((state, index) => {
+    if (index === activeIndex) return 'active';
+    if (index < activeIndex) return state === 'active' || state === 'done' ? 'done' : 'skipped';
+    return 'pending';
+  });
+  renderStages();
+}
+
+function renderStages() {
+  stageItems.forEach(({ icon, label, note }, index) => {
+    const state = stageStates[index];
+
+    if (state === 'active') {
+      icon.replaceChildren($spinner);
+      icon.className = 'w-4 flex justify-center shrink-0';
+      label.className = 'text-sm text-slate-50 font-medium';
+    } else {
+      icon.className = 'w-4 flex justify-center shrink-0 text-sm';
+      icon.textContent = state === 'done' ? '✓' : state === 'skipped' ? '–' : '○';
+      icon.classList.toggle('text-accent', state === 'done');
+      icon.classList.toggle('text-muted/50', state !== 'done');
+      label.className = state === 'done' ? 'text-sm text-muted' : 'text-sm text-muted/60';
+    }
+    note.textContent = state === 'skipped' ? 'not needed' : '';
+  });
 }
 
 function resetUI() {
   hide($status);
   hide($error);
   hide($result);
-  setStatusMessage(DEFAULT_STATUS_MESSAGE);
+  resetStages();
   $btn.disabled = false;
 }
 
@@ -137,7 +194,7 @@ function pollResult(taskId) {
       const data = await response.json();
 
       if (data.status === 'pending') {
-        if (data.stage) setStatusMessage(STAGE_MESSAGES[data.stage] || DEFAULT_STATUS_MESSAGE);
+        if (data.stage) setActiveStage(data.stage);
         return;
       }
 
