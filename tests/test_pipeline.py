@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.config import settings
-from app.pipeline import UnsupportedLiveStatusError, VideoTooShortError, get_transcript
+from app.pipeline import (
+    NoSubtitlesError,
+    UnsupportedLiveStatusError,
+    VideoTooShortError,
+    get_transcript,
+)
 from app.whisper import clear_model_cache
 
 
@@ -35,6 +40,7 @@ def _info(
     title: object = None,
     channel: object = None,
     upload_date: object = None,
+    language: object = None,
 ) -> MagicMock:
     """Mocked yt-dlp metadata JSON for the precheck call."""
     payload: dict[str, object] = {
@@ -42,6 +48,7 @@ def _info(
         "title": title,
         "channel": channel,
         "upload_date": upload_date,
+        "language": language,
     }
     if live_status is not None:
         payload["live_status"] = live_status
@@ -63,7 +70,7 @@ def test_manual_subtitle_returns_manual_and_plain_text(tmp_path: Path) -> None:
         if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
             idx = cmd.index("--output")
             out_base = cmd[idx + 1]
-            Path(out_base + ".vtt").write_text(vtt_body)
+            Path(out_base + ".en.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -86,7 +93,7 @@ def test_manual_subtitle_uses_configured_sub_langs(tmp_path: Path) -> None:
             return _info()
         if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
             idx = cmd.index("--output")
-            Path(cmd[idx + 1] + ".vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\na")
+            Path(cmd[idx + 1] + ".en.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\na")
         return _ok()
 
     with (
@@ -100,7 +107,7 @@ def test_manual_subtitle_uses_configured_sub_langs(tmp_path: Path) -> None:
 
 
 def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path) -> None:
-    """When only auto .vtt exists (no manual), get_transcript returns ('auto', text)."""
+    """When only the original-language auto .vtt exists, get_transcript returns ('auto', text)."""
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nauto line"
 
     call_count = 0
@@ -113,7 +120,7 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
         if "--write-auto-sub" in cmd:
             idx = cmd.index("--output")
             out_base = cmd[idx + 1]
-            Path(out_base + ".vtt").write_text(vtt_body)
+            Path(out_base + ".en-orig.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -123,6 +130,221 @@ def test_auto_subtitle_when_no_manual_returns_auto_and_plain_text(tmp_path: Path
         source, content, _meta = get_transcript("https://www.youtube.com/watch?v=xyz")
     assert source == "auto"
     assert content == "auto line"
+
+
+def test_auto_subtitle_download_requests_original_language_track(tmp_path: Path) -> None:
+    """The auto-caption call asks yt-dlp for the original-language '-orig' track only."""
+    seen: list[list[str]] = []
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        seen.append(cmd)
+        if _is_info_call(cmd):
+            return _info()
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        with pytest.raises(NoSubtitlesError):
+            get_transcript("https://www.youtube.com/watch?v=abc")
+
+    auto_calls = [c for c in seen if "--write-auto-sub" in c]
+    assert auto_calls, "expected an auto-caption download call"
+    assert auto_calls[0][auto_calls[0].index("--sub-langs") + 1] == ".*-orig"
+
+
+def test_original_auto_track_beats_manual_subtitle_in_another_language(
+    tmp_path: Path,
+) -> None:
+    """A Chinese video with uploaded English subtitles still yields Chinese text.
+
+    The '-orig' track is generated from the original audio, so it wins over a
+    manual subtitle in a different (translated) language.
+    """
+    zh_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n中文内容"
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(language="zh-Hans")
+        if "--write-auto-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".zh-Hans-orig.vtt").write_text(zh_body)
+        elif "--write-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".en.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nenglish content"
+            )
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=zh")
+    assert source == "auto"
+    assert content == "中文内容"
+
+
+def test_manual_subtitle_in_original_language_beats_asr_track(tmp_path: Path) -> None:
+    """A manual subtitle in the same language as the '-orig' track wins on quality."""
+    manual_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n人工字幕"
+    asr_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n机器字幕"
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(language="zh-Hans")
+        if "--write-auto-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".zh-Hans-orig.vtt").write_text(asr_body)
+        elif "--write-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".zh-Hans.vtt").write_text(manual_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=zh")
+    assert source == "manual"
+    assert content == "人工字幕"
+
+
+def test_configured_language_order_decides_between_manual_tracks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With manual subtitles in several languages, the first configured match wins."""
+    monkeypatch.setattr(settings, "SUBTITLE_LANGS", "zh.*,en")
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".en.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nenglish"
+            )
+            Path(out_base + ".zh-Hans.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n中文"
+            )
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=multi")
+    assert source == "manual"
+    assert content == "中文"
+
+
+def test_single_orig_track_without_language_report_is_used(tmp_path: Path) -> None:
+    """When yt-dlp reports no original language, a single '-orig' track is trusted."""
+    zh_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n中文内容"
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-auto-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".zh-Hans-orig.vtt").write_text(zh_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=zh")
+    assert source == "auto"
+    assert content == "中文内容"
+
+
+def test_multi_audio_orig_tracks_need_language_match(tmp_path: Path) -> None:
+    """Dubbed '-orig' tracks that do not match the reported original audio are ignored."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(language="en-US")
+        if "--write-auto-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".ar-orig.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nعربى"
+            )
+            Path(out_base + ".bn-orig.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nবাংলা"
+            )
+            return _ok()
+        if "-f" in cmd:
+            idx = cmd.index("--output")
+            out_dir = Path(cmd[idx + 1]).parent
+            (out_dir / "audio_abc.m4a").write_bytes(b"fake_audio")
+        return _ok()
+
+    mock_segments = [_make_segment(0.0, 2.5, "english default audio")]
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(work_dir)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+        patch("app.whisper.WhisperModel") as mock_model_cls,
+    ):
+        mock_model_cls.return_value.transcribe.return_value = (mock_segments, None)
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=dub")
+    assert source == "whisper"
+    assert content == "english default audio"
+
+
+def test_multi_audio_orig_track_matching_language_is_used(tmp_path: Path) -> None:
+    """Among several '-orig' tracks, the one matching the reported language wins."""
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info(language="en-US")
+        if "--write-auto-sub" in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".en-orig.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nenglish original"
+            )
+            Path(out_base + ".ar-orig.vtt").write_text(
+                "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nعربى"
+            )
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=dub")
+    assert source == "auto"
+    assert content == "english original"
+
+
+def test_vtt_header_and_inline_tags_stripped(tmp_path: Path) -> None:
+    """Auto-caption VTT headers and word-level inline tags never reach the transcript."""
+    vtt_body = (
+        "WEBVTT\n"
+        "Kind: captions\n"
+        "Language: zh-Hans\n\n"
+        "00:00:00.000 --> 00:00:02.000 align:start position:0%\n"
+        "今<00:00:00.500><c>日</c>天<00:00:01.000><c>气</c>\n"
+    )
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".zh-Hans.vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        source, content, _meta = get_transcript("https://www.youtube.com/watch?v=tags")
+    assert source == "manual"
+    assert content == "今日天气"
 
 
 def test_manual_subtitle_429_falls_back_to_auto(tmp_path: Path) -> None:
@@ -140,7 +362,7 @@ def test_manual_subtitle_429_falls_back_to_auto(tmp_path: Path) -> None:
             )
         if "--write-auto-sub" in cmd:
             idx = cmd.index("--output")
-            Path(cmd[idx + 1] + ".vtt").write_text(vtt_body)
+            Path(cmd[idx + 1] + ".en-orig.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -200,7 +422,7 @@ def test_duplicate_caption_lines_collapsed(tmp_path: Path) -> None:
             return _info()
         if "--write-sub" in cmd:
             idx = cmd.index("--output")
-            Path(cmd[idx + 1] + ".vtt").write_text(vtt_body)
+            Path(cmd[idx + 1] + ".en.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -277,7 +499,7 @@ def test_was_live_video_is_transcribed(tmp_path: Path) -> None:
         if _is_info_call(cmd):
             return _info(live_status="was_live")
         if "--write-sub" in cmd:
-            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+            Path(cmd[cmd.index("--output") + 1] + ".en.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -335,7 +557,7 @@ def test_metadata_extracted_from_probe_info(tmp_path: Path) -> None:
         if _is_info_call(cmd):
             return _info(title="A Talk", channel="Some Channel", upload_date="20260101")
         if "--write-sub" in cmd:
-            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+            Path(cmd[cmd.index("--output") + 1] + ".en.vtt").write_text(vtt_body)
         return _ok()
 
     with (
@@ -359,7 +581,7 @@ def test_metadata_falls_back_to_uploader_when_channel_missing(tmp_path: Path) ->
         if _is_info_call(cmd):
             return MagicMock(returncode=0, stdout=json.dumps(info).encode())
         if "--write-sub" in cmd:
-            Path(cmd[cmd.index("--output") + 1] + ".vtt").write_text(vtt_body)
+            Path(cmd[cmd.index("--output") + 1] + ".en.vtt").write_text(vtt_body)
         return _ok()
 
     with (

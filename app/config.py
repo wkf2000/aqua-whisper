@@ -20,8 +20,10 @@ class Settings(BaseSettings):
     WHISPER_VAD_FILTER: bool = True
     # Batched inference: faster on CPU but uses more peak memory
     WHISPER_BATCHED: bool = False
-    # Subtitle languages for yt-dlp --sub-langs (regex, comma-separated; "all" for any)
-    SUBTITLE_LANGS: str = "en"
+    # Subtitle languages for yt-dlp --sub-langs (regex, comma-separated; "all" for any).
+    # Order is preference: manual subtitles are picked by the first matching pattern.
+    # Auto captions are always fetched in the video's original language first.
+    SUBTITLE_LANGS: str = "zh.*,en"
     # Skip the pipeline for videos already saved in the transcript store (any age);
     # set False to always re-run and refresh the stored transcript.
     TRANSCRIPT_DEDUP: bool = True

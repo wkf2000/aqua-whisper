@@ -1,12 +1,17 @@
 """Transcript pipeline: yt-dlp manual/auto subtitles, then Whisper fallback.
 
-Always returns plain text. Live/upcoming broadcasts and videos not longer than
-60 seconds are rejected up front with a clear error instead of the old
-misleading "no subtitles" one. A failed subtitle download (e.g. YouTube HTTP
-429 rate limiting) falls back to the next strategy instead of failing the job.
+Always returns plain text, in the video's original language: the auto captions
+generated from the original audio (yt-dlp "-orig" tracks) are preferred over
+machine-translated tracks and over manual subtitles in other languages. Manual
+subtitles are fetched for the languages in SUBTITLE_LANGS, in that order.
+Live/upcoming broadcasts and videos not longer than 60 seconds are rejected up
+front with a clear error instead of the old misleading "no subtitles" one. A
+failed subtitle download (e.g. YouTube HTTP 429 rate limiting) falls back to the
+next strategy instead of failing the job.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from collections.abc import Iterable
@@ -47,6 +52,12 @@ _AUDIO_EXTS = {
     ".mp4",
     ".mkv",
 }
+
+# yt-dlp labels the auto captions generated from the original audio with an
+# "-orig" suffix (e.g. "zh-Hans-orig"); machine-translated tracks carry no
+# marker. Fetching only the original track keeps the transcript in the video's
+# own language instead of a translation such as English.
+_ORIG_SUB_LANGS = ".*-orig"
 
 
 class NoSubtitlesError(Exception):
@@ -105,7 +116,7 @@ def _run(cmd: list[str], timeout: int) -> str:
     return result.stdout.decode("utf-8", "replace").strip()
 
 
-def _download_subtitles(video_url: str, out_base: str, sub_flag: str) -> list[Path]:
+def _download_subtitles(video_url: str, out_base: str, sub_flag: str, sub_langs: str) -> list[Path]:
     """Run one yt-dlp subtitle download and return the .vtt files it wrote.
 
     A failed download (e.g. HTTP 429 rate limiting when YouTube rejects
@@ -120,7 +131,7 @@ def _download_subtitles(video_url: str, out_base: str, sub_flag: str) -> list[Pa
                 f"duration>{MIN_VIDEO_DURATION}",
                 sub_flag,
                 "--sub-langs",
-                settings.SUBTITLE_LANGS,
+                sub_langs,
                 "--skip-download",
                 "--output",
                 out_base,
@@ -139,6 +150,58 @@ def _download_subtitles(video_url: str, out_base: str, sub_flag: str) -> list[Pa
     return list(Path(out_base).parent.glob("*.vtt"))
 
 
+def _configured_sub_langs() -> list[str]:
+    """Configured subtitle language patterns, in preference order."""
+    return [lang.strip() for lang in settings.SUBTITLE_LANGS.split(",") if lang.strip()]
+
+
+def _subtitle_lang(path: Path, out_base: str) -> str:
+    """Language code from a '<out_base>.<lang>.vtt' subtitle filename, or ''."""
+    prefix = f"{Path(out_base).name}."
+    if not (path.name.startswith(prefix) and path.name.endswith(".vtt")):
+        return ""
+    return path.name[len(prefix) : -len(".vtt")]
+
+
+def _base_lang(code: str) -> str:
+    """Primary language part of a code: 'zh-Hans', 'zh-Hans-orig', 'en-US' -> base."""
+    return code.split("-")[0].strip().lower()
+
+
+def _pick_subtitle(files: list[Path], out_base: str, patterns: list[str]) -> Path | None:
+    """First file whose language matches the earliest pattern.
+
+    yt-dlp matches --sub-langs patterns with a case-insensitive fullmatch, and
+    the caller must apply the same rule when several languages were downloaded.
+    """
+    for pattern in patterns:
+        matcher = re.compile(pattern, re.IGNORECASE)
+        for path in sorted(files):
+            if matcher.fullmatch(_subtitle_lang(path, out_base)):
+                return path
+    return None
+
+
+def _original_track(files: list[Path], out_base: str, language: str | None) -> Path | None:
+    """Pick the '-orig' auto-caption track that matches the video's spoken language.
+
+    Multi-audio videos have one '-orig' track per dubbed language, so when
+    yt-dlp reports the original audio language, only a matching '-orig' track
+    is trusted. Without that report, a single '-orig' track is used as-is and
+    several tracks mean the original language cannot be told apart from dubs.
+    """
+    orig_files = [p for p in sorted(files) if _subtitle_lang(p, out_base).endswith("-orig")]
+    if not orig_files:
+        return None
+    if language is not None:
+        base = _base_lang(language)
+        for path in orig_files:
+            if _base_lang(_subtitle_lang(path, out_base)) == base:
+                return path
+        return None
+    return orig_files[0] if len(orig_files) == 1 else None
+
+
 def _dedupe(lines: Iterable[str]) -> list[str]:
     """Keep non-empty lines, collapsing consecutive duplicates (rolling captions)."""
     out: list[str] = []
@@ -152,12 +215,24 @@ def _dedupe(lines: Iterable[str]) -> list[str]:
 
 
 def _vtt_lines(vtt: str) -> list[str]:
-    """Caption lines from a VTT file, excluding the header and timestamp cues."""
+    """Caption lines from a VTT file, excluding the header block and timestamp cues.
+
+    Auto-generated captions also carry word-level inline markup
+    (e.g. "<c>字</c>" and <00:00:02.919> tags); it is removed so the transcript
+    and the LLM summary see plain text.
+    """
     lines: list[str] = []
+    in_cues = False
     for raw in vtt.splitlines():
         line = raw.strip()
-        if line and not line.startswith("WEBVTT") and "-->" not in line:
-            lines.append(line)
+        if "-->" in line:
+            in_cues = True
+            continue
+        if not in_cues or not line:
+            continue
+        cleaned = re.sub(r"<[^>]+>", "", line).strip()
+        if cleaned:
+            lines.append(cleaned)
     return lines
 
 
@@ -216,24 +291,51 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
     _check_live_status(info, video_url)
     _check_duration(info)
     metadata = _extract_metadata(info)
+    # yt-dlp reports the original audio language when it can tell it from the
+    # captions or the audio tracks (e.g. "zh-Hans", "en-US"); None otherwise.
+    original_language = info.get("language")
+    if not isinstance(original_language, str) or not original_language.strip():
+        original_language = None
     temp_dir = mkdtemp()
     try:
         out_base = str(Path(temp_dir) / "subs")
 
-        # Try manual subtitles first; a failed download falls back to the next
-        # strategy instead of failing the job.
+        # Manual subtitles in the configured languages; a failed download falls
+        # back to the next strategy instead of failing the job.
         logger.info("get_transcript.try_manual_subtitles", video_url=video_url)
-        manual_vtt = _download_subtitles(video_url, out_base, "--write-sub")
-        if manual_vtt:
-            logger.info("get_transcript.manual_subtitles_found", video_url=video_url)
-            return ("manual", _vtt_to_plain_text(manual_vtt[0].read_text()), metadata)
+        manual_files = _download_subtitles(
+            video_url, out_base, "--write-sub", settings.SUBTITLE_LANGS
+        )
+        manual_pick = _pick_subtitle(manual_files, out_base, _configured_sub_langs())
+        if manual_pick is not None:
+            logger.info(
+                "get_transcript.manual_subtitles_found",
+                video_url=video_url,
+                language=_subtitle_lang(manual_pick, out_base),
+            )
 
-        # Try auto-generated subtitles.
+        # Auto captions in the video's own language, whatever that language is.
         logger.info("get_transcript.try_auto_subtitles", video_url=video_url)
-        auto_vtt = _download_subtitles(video_url, out_base, "--write-auto-sub")
-        if auto_vtt:
-            logger.info("get_transcript.auto_subtitles_found", video_url=video_url)
-            return ("auto", _vtt_to_plain_text(auto_vtt[0].read_text()), metadata)
+        auto_files = _download_subtitles(video_url, out_base, "--write-auto-sub", _ORIG_SUB_LANGS)
+        orig_pick = _original_track(auto_files, out_base, original_language)
+        if orig_pick is not None:
+            logger.info(
+                "get_transcript.original_auto_subtitles_found",
+                video_url=video_url,
+                language=_subtitle_lang(orig_pick, out_base),
+            )
+
+        # The original-language track wins over a manual subtitle in another
+        # language (a Chinese clip with uploaded English subtitles stays Chinese);
+        # a manual subtitle in the same language wins on quality.
+        if orig_pick is not None and (
+            manual_pick is None
+            or _base_lang(_subtitle_lang(manual_pick, out_base))
+            != _base_lang(_subtitle_lang(orig_pick, out_base))
+        ):
+            return ("auto", _vtt_to_plain_text(orig_pick.read_text()), metadata)
+        if manual_pick is not None:
+            return ("manual", _vtt_to_plain_text(manual_pick.read_text()), metadata)
 
         # Whisper fallback: download audio-only with yt-dlp, transcribe with faster-whisper.
         logger.info("get_transcript.whisper_fallback_start", video_url=video_url)
