@@ -36,3 +36,12 @@ def test_ui_pending_result_keeps_existing_shape() -> None:
     with patch("app.main.get_task_result", return_value=None):
         response = client.get("/ui/transcript/task-id")
     assert response.json() == {"status": "pending"}
+
+
+def test_ui_pending_result_can_carry_stage() -> None:
+    """A stage row keeps status pending and adds the stage code for the frontend."""
+    with patch(
+        "app.main.get_task_result", return_value={"status": "pending", "stage": "summarizing"}
+    ):
+        response = client.get("/ui/transcript/task-id")
+    assert response.json() == {"status": "pending", "stage": "summarizing"}

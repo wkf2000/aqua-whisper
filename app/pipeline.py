@@ -14,7 +14,7 @@ import json
 import re
 import shutil
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, NamedTuple
@@ -26,6 +26,10 @@ from app.config import settings
 from app.whisper import get_model
 
 logger = structlog.get_logger()
+
+# Receives a short stage code ("downloading_subtitles", ...) while the pipeline
+# runs; UI tasks use it to publish progress updates for frontend polling.
+ProgressReporter = Callable[[str], None]
 
 MIN_VIDEO_DURATION = 60
 
@@ -284,8 +288,20 @@ def _check_duration(info: dict[str, Any]) -> None:
         )
 
 
-def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
-    """Return (source, plain_text, metadata). Raises NoSubtitlesError if no transcript."""
+def _report(progress: ProgressReporter | None, stage: str) -> None:
+    """Forward a pipeline stage to the caller's progress callback, if any."""
+    if progress is not None:
+        progress(stage)
+
+
+def get_transcript(
+    video_url: str, progress: ProgressReporter | None = None
+) -> tuple[str, str, VideoMetadata]:
+    """Return (source, plain_text, metadata). Raises NoSubtitlesError if no transcript.
+
+    The optional progress callback receives one stage code per pipeline step
+    ("downloading_subtitles", "downloading_audio", "transcribing_audio").
+    """
     logger.info("get_transcript.start", video_url=video_url)
     info = _probe_video(video_url)
     _check_live_status(info, video_url)
@@ -303,6 +319,7 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
         # Manual subtitles in the configured languages; a failed download falls
         # back to the next strategy instead of failing the job.
         logger.info("get_transcript.try_manual_subtitles", video_url=video_url)
+        _report(progress, "downloading_subtitles")
         manual_files = _download_subtitles(
             video_url, out_base, "--write-sub", settings.SUBTITLE_LANGS
         )
@@ -339,6 +356,7 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
 
         # Whisper fallback: download audio-only with yt-dlp, transcribe with faster-whisper.
         logger.info("get_transcript.whisper_fallback_start", video_url=video_url)
+        _report(progress, "downloading_audio")
         audio_out = str(Path(temp_dir) / "audio_%(id)s.%(ext)s")
         _run(
             [
@@ -362,6 +380,7 @@ def get_transcript(video_url: str) -> tuple[str, str, VideoMetadata]:
             logger.error("get_transcript.no_audio_downloaded_for_whisper", video_url=video_url)
             raise NoSubtitlesError("No manual or auto subtitles available for this video")
         audio_path = str(audio_files[0])
+        _report(progress, "transcribing_audio")
         model = get_model()
         if settings.WHISPER_BATCHED:
             segments, _ = BatchedInferencePipeline(model).transcribe(

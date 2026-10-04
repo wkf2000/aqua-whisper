@@ -3,20 +3,35 @@ import { hide, setError, show } from './ui.js';
 const POLL_INTERVAL = 3000;
 const POLL_TIMEOUT = 5 * 60 * 1000;
 
+const DEFAULT_STATUS_MESSAGE = 'Transcribing and generating summary…';
+const STAGE_MESSAGES = {
+  checking_saved: 'Checking saved videos…',
+  downloading_subtitles: 'Downloading subtitles…',
+  downloading_audio: 'Downloading audio…',
+  transcribing_audio: 'Transcribing audio…',
+  summarizing: 'Generating summary…',
+};
+
 const $form = document.getElementById('form');
 const $input = document.getElementById('url-input');
 const $btn = document.getElementById('submit-btn');
 const $status = document.getElementById('status');
+const $statusText = document.getElementById('status-text');
 const $error = document.getElementById('error');
 const $result = document.getElementById('result');
 const $text = document.getElementById('summary-text');
 const $source = document.getElementById('source-badge');
 const $copyBtn = document.getElementById('copy-btn');
 
+function setStatusMessage(message) {
+  $statusText.textContent = message;
+}
+
 function resetUI() {
   hide($status);
   hide($error);
   hide($result);
+  setStatusMessage(DEFAULT_STATUS_MESSAGE);
   $btn.disabled = false;
 }
 
@@ -121,7 +136,10 @@ function pollResult(taskId) {
       const response = await fetch(`/ui/transcript/${taskId}`);
       const data = await response.json();
 
-      if (data.status === 'pending') return;
+      if (data.status === 'pending') {
+        if (data.stage) setStatusMessage(STAGE_MESSAGES[data.stage] || DEFAULT_STATUS_MESSAGE);
+        return;
+      }
 
       clearInterval(timer);
       hide($status);

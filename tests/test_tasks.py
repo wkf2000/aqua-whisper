@@ -1,6 +1,6 @@
 """Tests for Celery tasks: run_transcript_pipeline, webhook POST, and dedup."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -358,7 +358,7 @@ def test_ui_task_returns_transcript_and_summary(summary: str | None) -> None:
         patch("app.tasks.save_task_result") as mock_save,
     ):
         run_transcript_pipeline_ui.run("task-id", "video-url", True)
-    mock_process.assert_called_once_with("video-url", True)
+    mock_process.assert_called_once_with("video-url", True, progress=ANY)
     mock_save.assert_called_once_with(
         "task-id",
         {"status": "success", "source": "auto", "transcript": "text", "summary": summary},
@@ -373,3 +373,56 @@ def test_ui_task_transcription_failure_keeps_error_shape() -> None:
     ):
         run_transcript_pipeline_ui.run("task-id", "video-url", True)
     mock_save.assert_called_once_with("task-id", {"status": "failed", "error": "failed"})
+
+
+def test_ui_task_publishes_progress_stages() -> None:
+    """The UI task writes each stage to Redis so the frontend can show progress."""
+    with (
+        patch("app.tasks.get_stored_transcript", return_value=None),
+        patch("app.tasks.get_transcript", return_value=("manual", "text", _META)) as mock_pipeline,
+        patch("app.tasks.generate_summary", return_value="- Summary"),
+        patch("app.tasks.save_transcript"),
+        patch("app.tasks.save_task_progress") as mock_progress,
+        patch("app.tasks.save_task_result") as mock_save,
+    ):
+        run_transcript_pipeline_ui.run("task-id", "https://youtu.be/abc123def45", True)
+        assert [call.args for call in mock_progress.call_args_list] == [
+            ("task-id", "checking_saved"),
+            ("task-id", "summarizing"),
+        ]
+        # The pipeline receives a callback that writes stage updates to Redis.
+        progress = mock_pipeline.call_args.args[1]
+        progress("downloading_subtitles")
+        mock_progress.assert_any_call("task-id", "downloading_subtitles")
+    mock_save.assert_called_once()
+
+
+def test_ui_task_progress_store_failure_does_not_fail_job() -> None:
+    """A Redis failure while writing a stage update must not fail the task."""
+    with (
+        patch("app.tasks.get_stored_transcript", return_value=None),
+        patch("app.tasks.get_transcript", return_value=("manual", "text", _META)),
+        patch("app.tasks.generate_summary", return_value="- Summary"),
+        patch("app.tasks.save_transcript"),
+        patch("app.tasks.save_task_progress", side_effect=RuntimeError("redis down")),
+        patch("app.tasks.save_task_result") as mock_save,
+    ):
+        run_transcript_pipeline_ui.run("task-id", "https://youtu.be/abc123def45", True)
+    mock_save.assert_called_once_with(
+        "task-id",
+        {"status": "success", "source": "manual", "transcript": "text", "summary": "- Summary"},
+    )
+
+
+def test_dedup_hit_generating_summary_reports_summarizing() -> None:
+    """Generating a missing summary from a stored row reports the summarizing stage."""
+    stages: list[str] = []
+    with (
+        patch("app.tasks.get_stored_transcript", return_value=_stored("auto", "old text")),
+        patch("app.tasks.generate_summary", return_value="- Summary"),
+        patch("app.tasks.save_summary"),
+    ):
+        _transcript_with_dedup(
+            "https://youtu.be/abc123def45", summarize=True, progress=stages.append
+        )
+    assert stages == ["checking_saved", "summarizing"]

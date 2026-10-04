@@ -347,6 +347,61 @@ def test_vtt_header_and_inline_tags_stripped(tmp_path: Path) -> None:
     assert content == "今日天气"
 
 
+def test_progress_reports_subtitle_stage(tmp_path: Path) -> None:
+    """The progress callback receives one stage code on the subtitle path."""
+    stages: list[str] = []
+    vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nline"
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd and "--write-auto-sub" not in cmd:
+            out_base = cmd[cmd.index("--output") + 1]
+            Path(out_base + ".en.vtt").write_text(vtt_body)
+        return _ok()
+
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(tmp_path)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+    ):
+        _source, _content, _meta = get_transcript(
+            "https://www.youtube.com/watch?v=prog", progress=stages.append
+        )
+    assert stages == ["downloading_subtitles"]
+
+
+def test_progress_reports_whisper_stages(tmp_path: Path) -> None:
+    """The progress callback receives every stage code on the Whisper path."""
+    stages: list[str] = []
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    def run_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+        if _is_info_call(cmd):
+            return _info()
+        if "--write-sub" in cmd or "--write-auto-sub" in cmd:
+            return MagicMock(returncode=1, stdout=b"", stderr=b"HTTP Error 429: Too Many Requests")
+        if "-f" in cmd:
+            idx = cmd.index("--output")
+            out_dir = Path(cmd[idx + 1]).parent
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "audio_abc.m4a").write_bytes(b"fake_audio")
+        return _ok()
+
+    mock_segments = [_make_segment(0.0, 2.5, "whisper line")]
+    with (
+        patch("app.pipeline.mkdtemp", return_value=str(work_dir)),
+        patch("app.pipeline.subprocess.run", side_effect=run_effect),
+        patch("app.whisper.WhisperModel") as mock_model_cls,
+    ):
+        mock_model_cls.return_value.transcribe.return_value = (mock_segments, None)
+        source, _content, _meta = get_transcript(
+            "https://www.youtube.com/watch?v=prog", progress=stages.append
+        )
+    assert source == "whisper"
+    assert stages == ["downloading_subtitles", "downloading_audio", "transcribing_audio"]
+
+
 def test_manual_subtitle_429_falls_back_to_auto(tmp_path: Path) -> None:
     """A failed manual-subtitle download (HTTP 429) falls through to auto subtitles."""
     vtt_body = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nauto line"
