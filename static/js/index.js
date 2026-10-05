@@ -46,26 +46,67 @@ $stageList.replaceChildren(...stageItems.map(({ item }) => item));
 
 // Stage states: 'pending', 'active', 'done', or 'skipped'.
 let stageStates = STAGES.map(() => 'pending');
+let stageStartedAt = null;
+let stageDurations = STAGES.map(() => null);
+let stageTimer = null;
 
 function resetStages() {
+  stopStageTimer();
   // The first stage is active from the start: the task always begins there.
   stageStates = STAGES.map((_stage, index) => (index === 0 ? 'active' : 'pending'));
+  stageStartedAt = Date.now();
+  stageDurations = STAGES.map(() => null);
+  stageTimer = setInterval(renderStages, 1000);
   renderStages();
 }
 
 function setActiveStage(stageKey) {
   const activeIndex = STAGES.findIndex((stage) => stage.key === stageKey);
   if (activeIndex === -1) return; // Unknown stage: keep the current display.
+  const currentActiveIndex = stageStates.indexOf('active');
+  if (activeIndex <= currentActiveIndex) return;
+
+  const now = Date.now();
+  if (currentActiveIndex !== -1 && stageStartedAt !== null) {
+    stageDurations[currentActiveIndex] = Math.floor((now - stageStartedAt) / 1000);
+  }
 
   stageStates = stageStates.map((state, index) => {
     if (index === activeIndex) return 'active';
     if (index < activeIndex) return state === 'active' || state === 'done' ? 'done' : 'skipped';
     return 'pending';
   });
+  stageStartedAt = now;
   renderStages();
 }
 
+function finishStages() {
+  const now = Date.now();
+  const activeIndex = stageStates.indexOf('active');
+  if (activeIndex !== -1 && stageStartedAt !== null) {
+    stageDurations[activeIndex] = Math.floor((now - stageStartedAt) / 1000);
+  }
+  stageStates = stageStates.map((state) => {
+    if (state === 'active') return 'done';
+    if (state === 'pending') return 'skipped';
+    return state;
+  });
+  stageStartedAt = null;
+  stopStageTimer();
+  renderStages();
+}
+
+function stopStageTimer() {
+  if (stageTimer !== null) {
+    clearInterval(stageTimer);
+    stageTimer = null;
+  }
+}
+
 function renderStages() {
+  const activeIndex = stageStates.indexOf('active');
+  const elapsed = stageStartedAt === null ? null : Math.floor((Date.now() - stageStartedAt) / 1000);
+
   stageItems.forEach(({ icon, label, note }, index) => {
     const state = stageStates[index];
 
@@ -80,7 +121,14 @@ function renderStages() {
       icon.classList.toggle('text-muted/50', state !== 'done');
       label.className = state === 'done' ? 'text-sm text-muted' : 'text-sm text-muted/60';
     }
-    note.textContent = state === 'skipped' ? 'not needed' : '';
+    const duration = state === 'active' && index === activeIndex
+      ? elapsed
+      : stageDurations[index];
+    note.textContent = state === 'skipped'
+      ? 'not needed'
+      : duration === null
+        ? ''
+        : `${duration}s`;
   });
 }
 
@@ -151,7 +199,10 @@ async function handleSubmit(event) {
   resetUI();
 
   const url = $input.value.trim();
-  if (!url) return;
+  if (!url) {
+    stopStageTimer();
+    return;
+  }
 
   $btn.disabled = true;
   show($status);
@@ -171,6 +222,7 @@ async function handleSubmit(event) {
     const { task_id: taskId } = await response.json();
     pollResult(taskId);
   } catch (error) {
+    stopStageTimer();
     hide($status);
     setError($error, error.message);
     $btn.disabled = false;
@@ -183,6 +235,7 @@ function pollResult(taskId) {
   const timer = setInterval(async () => {
     if (Date.now() - start > POLL_TIMEOUT) {
       clearInterval(timer);
+      stopStageTimer();
       hide($status);
       setError($error, 'Timed out waiting for summary. Please try again.');
       $btn.disabled = false;
@@ -199,20 +252,23 @@ function pollResult(taskId) {
       }
 
       clearInterval(timer);
-      hide($status);
 
       if (data.status === 'success') {
+        finishStages();
         resetCopyButton();
         $text.textContent = data.summary ?? 'No summary available';
         $source.textContent = `source: ${data.source}`;
         show($result);
       } else {
+        stopStageTimer();
+        hide($status);
         setError($error, data.error || 'Transcript processing failed.');
       }
 
       $btn.disabled = false;
     } catch {
       clearInterval(timer);
+      stopStageTimer();
       hide($status);
       setError($error, 'Lost connection to the server.');
       $btn.disabled = false;
