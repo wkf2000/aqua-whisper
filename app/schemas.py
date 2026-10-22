@@ -17,3 +17,9 @@ class UITranscriptRequest(BaseModel):
 
     video_url: str
     summarize: bool = False
+
+
+class UIDownloadRequest(BaseModel):
+    """Request body for POST /ui/download (video file download, no auth)."""
+
+    video_url: str

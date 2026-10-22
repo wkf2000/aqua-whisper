@@ -17,7 +17,7 @@
   <main class="w-full max-w-2xl">
     <div class="text-center mb-10">
       <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight">Aqua Whisper</h1>
-      <p class="mt-2 text-muted text-sm sm:text-base">Paste a YouTube URL to get its summary</p>
+      <p class="mt-2 text-muted text-sm sm:text-base">Summarize YouTube videos, or download YouTube and X.com videos</p>
       <p class="mt-2">
         <a href="/history" class="text-accent text-sm hover:text-emerald-400 transition-colors duration-200">View saved videos &rarr;</a>
       </p>
@@ -37,6 +37,13 @@
         class="h-10 px-5 rounded-lg bg-accent text-bg font-medium cursor-pointer hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Summarize
+      </button>
+      <button
+        id="download-btn"
+        type="button"
+        class="h-10 px-5 rounded-lg bg-surface text-slate-50 border border-slate-700 font-medium cursor-pointer hover:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Download
       </button>
     </form>
 
@@ -61,6 +68,21 @@
         </div>
       </div>
       <pre id="summary-text" class="bg-surface rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-slate-700"></pre>
+    </div>
+
+    <div id="download-result" class="mt-6 hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-muted uppercase tracking-wide font-medium">Video file</span>
+        <span id="download-meta" class="text-xs text-muted"></span>
+      </div>
+      <div class="flex items-center justify-between gap-4 bg-surface rounded-lg p-4 border border-slate-700">
+        <span id="download-title" class="text-sm truncate min-w-0"></span>
+        <a
+          id="download-link"
+          href="#"
+          class="shrink-0 text-xs px-3 py-1.5 rounded bg-accent text-bg font-medium hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors duration-200"
+        >Save video</a>
+      </div>
     </div>
   </main>
 

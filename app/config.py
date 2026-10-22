@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     TRANSCRIPT_DEDUP: bool = True
     # SQLite file for durable transcript storage
     TRANSCRIPT_DB_PATH: str = "./data/transcripts.db"
+    # Directory for downloaded video files (in Docker: set it under the /data bind mount)
+    DOWNLOAD_DIR: str = "./data/downloads"
+    # yt-dlp timeout for one video download in seconds
+    DOWNLOAD_TIMEOUT: int = Field(default=1800, gt=0)
+    # Downloaded files older than this are deleted when a new download starts
+    # (hours; 0 keeps files forever)
+    DOWNLOAD_TTL_HOURS: float = Field(default=72.0, ge=0)
+    # Preferred maximum video height in pixels; yt-dlp falls back to the best
+    # format at or below it, then to any format when none exists
+    DOWNLOAD_MAX_HEIGHT: int = Field(default=720, gt=0)
     # OpenAI-compatible chat completions; optional for transcript-only requests.
     LLM_BASE_URL: str = ""
     LLM_API_KEY: str = ""

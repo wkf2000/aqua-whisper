@@ -39,6 +39,7 @@ services:
       - .env
     environment:
       TRANSCRIPT_DB_PATH: /data/transcripts.db
+      DOWNLOAD_DIR: /data/downloads
     volumes:
       - ${AQUA_WHISPER_MODEL_DIR:-./whisper-model}:/whisper-model
       - ${AQUA_WHISPER_DATA_DIR:-./data}:/data
@@ -52,6 +53,7 @@ services:
       - .env
     environment:
       TRANSCRIPT_DB_PATH: /data/transcripts.db
+      DOWNLOAD_DIR: /data/downloads
     networks:
       - backend
     volumes:

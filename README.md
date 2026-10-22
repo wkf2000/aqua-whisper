@@ -9,6 +9,7 @@ Optionally generate and save a summary through an OpenAI-compatible LLM.
 - **Pipeline** — Tries manual subtitles → original-language auto captions → Whisper transcription. Always returns plain text in the video's original language: the auto captions generated from the original audio (yt-dlp `-orig` tracks) are preferred over machine-translated tracks and over uploaded subtitles in another language. Manual subtitles are fetched for the languages in `SUBTITLE_LANGS` (default `zh.*,en`, first match wins); a failed subtitle download (e.g. YouTube HTTP 429 rate limiting) falls back to the next strategy instead of failing the job; only finished videos (yt-dlp `live_status` of `not_live` or `was_live`) are processed, videos ≤ 60s are rejected with a clear error, and generated transcripts are saved durably to a SQLite store with their title, channel, duration, and upload date (videos already in the store are skipped; set `TRANSCRIPT_DEDUP=false` to re-transcribe).
 - **Summaries** — Set `summarize: true` to generate concise bullet points in the transcript's language using the official OpenAI Python SDK. Transcripts and summaries are saved to SQLite. The API defaults to transcript-only; the web UI requests and displays summaries.
 - **Web UI** — Single-page frontend at `/` with `/ui/transcript` submission, polling with a live stage checklist (checking saved videos, downloading subtitles, downloading audio, transcribing audio, generating summary), and saved-transcript history. No auth; deploy behind a reverse proxy (e.g. Cloudflare) for rate limiting and bot protection.
+- **Video downloads** — `POST /ui/download` accepts YouTube and X.com (`x.com`, `twitter.com`) URLs and downloads the video file with yt-dlp, capped at `DOWNLOAD_MAX_HEIGHT` (default 720p; falls back to the best format at or below it). Files are stored under a server-generated task id in `DOWNLOAD_DIR` (in Docker `/data/downloads`), served at `GET /ui/download/file/{task_id}`, and deleted when older than `DOWNLOAD_TTL_HOURS` (default 72). Live broadcasts are rejected; X posts that need login are not supported.
 - **Docker** — One image for both the FastAPI app and the Celery worker. Redis is external.
 
 ## Requirements
@@ -123,6 +124,9 @@ The repository also ships a small frontend (`static/index.html` for generating s
 | `GET /ui/transcript/{task_id}` | No | Polls the stored result: `pending`, `success` with `source`, `transcript`, and `summary`, or `failed` with `error`. |
 | `GET /ui/history`       | No   | Lists saved transcripts with metadata and summary, but no transcript text. Query params: `q` (search title/channel/video id), `source` (`manual` \| `auto` \| `whisper`), `sort` (`newest` \| `oldest` \| `longest` \| `shortest` \| `title`), `limit` (1&ndash;200), `offset`. Returns `{items, total, limit, offset}`. |
 | `GET /ui/history/{video_id}` | No | One saved transcript with its metadata, full transcript, and summary. |
+| `POST /ui/download`   | No   | Body: `video_url` (YouTube or X.com). Returns 202 + `task_id`; the worker downloads the video file to the server. |
+| `GET /ui/download/{task_id}` | No | Polls the download result: `pending` (with `stage`), `success` with `title`, `file_name`, and `size_bytes`, or `failed` with `error`. |
+| `GET /ui/download/file/{task_id}` | No | Serves the downloaded file as an attachment. Files expire after `DOWNLOAD_TTL_HOURS`. |
 
 These endpoints carry no auth by design. In production the frontend is served behind **Cloudflare**, which provides rate limiting and bot protection; the API (`/transcript`) is intentionally also unauthenticated so it can be called directly.
 
@@ -138,6 +142,10 @@ These endpoints carry no auth by design. In production the frontend is served be
 | `WHISPER_BATCHED`  | No   | Use faster-whisper batched inference (faster on CPU, higher peak memory). Default `false`. |
 | `TRANSCRIPT_DEDUP` | No | Skip the pipeline when the video already has a saved transcript, whatever its age. Default `true`; `false` always re-runs and refreshes the stored row. |
 | `TRANSCRIPT_DB_PATH` | No | SQLite file for durable transcript storage. Default `./data/transcripts.db`; in Docker fixed to `/data/transcripts.db` via the `AQUA_WHISPER_DATA_DIR` bind mount. |
+| `DOWNLOAD_DIR` | No | Directory for downloaded video files. Default `./data/downloads`; in Docker fixed to `/data/downloads` via the `AQUA_WHISPER_DATA_DIR` bind mount. |
+| `DOWNLOAD_TIMEOUT` | No | yt-dlp timeout for one video download in seconds. Default `1800`. |
+| `DOWNLOAD_TTL_HOURS` | No | Downloaded files older than this are deleted when a new download starts (hours; `0` keeps files forever). Default `72`. |
+| `DOWNLOAD_MAX_HEIGHT` | No | Preferred maximum video height in pixels for downloads; yt-dlp falls back to the best format at or below it. Default `720`. |
 | `LLM_BASE_URL` | For summaries | OpenAI-compatible API base URL including its API prefix, e.g. `https://api.openai.com/v1`. No default. |
 | `LLM_API_KEY` | For summaries | Bearer API key for the LLM service. No default. |
 | `LLM_MODEL` | For summaries | Model name accepted by the configured LLM service. No default. |

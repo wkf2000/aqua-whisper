@@ -1,5 +1,6 @@
 """FastAPI app: transcript submission API and unauthenticated web UI."""
 
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,12 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import get_stored_transcript, list_transcripts
+from app.download import find_download_file
 from app.logging_config import setup_logging
-from app.schemas import TranscriptRequest, UITranscriptRequest
+from app.schemas import TranscriptRequest, UIDownloadRequest, UITranscriptRequest
+from app.sources import is_downloadable_url
 from app.store import get_task_result
-from app.tasks import run_transcript_pipeline, run_transcript_pipeline_ui
+from app.tasks import run_transcript_pipeline, run_transcript_pipeline_ui, run_video_download
 from app.tracing import setup_tracing
 from app.youtube import is_youtube_url
 
@@ -25,6 +28,9 @@ setup_tracing(service_name="aqua-whisper-api", environment=settings.ENV)
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 _STATIC_DIR.mkdir(exist_ok=True)
+
+# Task ids are uuid4 strings; the file-serving route rejects any other shape.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
@@ -57,6 +63,13 @@ def _new_task_id(video_url: str) -> str:
     """Reject non-YouTube URLs and return a fresh task id."""
     if not is_youtube_url(video_url):
         raise HTTPException(status_code=400, detail="video_url must be a YouTube URL")
+    return str(uuid4())
+
+
+def _new_download_task_id(video_url: str) -> str:
+    """Reject unsupported download URLs and return a fresh task id."""
+    if not is_downloadable_url(video_url):
+        raise HTTPException(status_code=400, detail="video_url must be a YouTube or X.com URL")
     return str(uuid4())
 
 
@@ -102,6 +115,39 @@ def ui_transcript(body: UITranscriptRequest) -> dict[str, str]:
 @app.get("/ui/transcript/{task_id}")
 def ui_transcript_status(task_id: str) -> dict[str, Any]:
     """Poll for a UI transcript task result."""
+    result = get_task_result(task_id)
+    if result is None:
+        return {"status": "pending"}
+    return result
+
+
+@app.post("/ui/download", status_code=202)
+def ui_download(body: UIDownloadRequest) -> dict[str, str]:
+    """Accept a YouTube or X.com URL, enqueue download task, return task_id."""
+    task_id = _new_download_task_id(body.video_url)
+    run_video_download.apply_async(args=[task_id, body.video_url])
+    return {"task_id": task_id}
+
+
+@app.get("/ui/download/file/{task_id}")
+def ui_download_file(task_id: str) -> FileResponse:
+    """Serve the file downloaded for task_id for playback or saving."""
+    # Task ids are uuid4 strings; anything else never matches a stored file.
+    if not _UUID_RE.fullmatch(task_id):
+        raise HTTPException(status_code=404, detail="Download file not found")
+    path = find_download_file(task_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Download file not found")
+    result = get_task_result(task_id) or {}
+    file_name = result.get("file_name")
+    if not isinstance(file_name, str) or not file_name.strip():
+        file_name = f"video{path.suffix}"
+    return FileResponse(path, filename=file_name)
+
+
+@app.get("/ui/download/{task_id}")
+def ui_download_status(task_id: str) -> dict[str, Any]:
+    """Poll for a UI download task result."""
     result = get_task_result(task_id)
     if result is None:
         return {"status": "pending"}

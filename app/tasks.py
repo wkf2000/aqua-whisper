@@ -7,6 +7,7 @@ from opentelemetry import trace
 from app.celery_app import celery_app
 from app.config import settings
 from app.db import get_stored_transcript, save_summary, save_transcript
+from app.download import download_video, purge_expired_downloads, safe_filename
 from app.pipeline import ProgressReporter, get_transcript
 from app.store import save_task_progress, save_task_result
 from app.summary import generate_summary
@@ -181,4 +182,46 @@ def run_transcript_pipeline_ui(task_id: str, video_url: str, summarize: bool = F
                 "status": "failed",
                 "error": str(e),
             }
+        save_task_result(task_id, payload)
+
+
+@celery_app.task
+def run_video_download(task_id: str, video_url: str) -> None:
+    """Download the video at video_url and store the result for frontend polling."""
+    with tracer.start_as_current_span("run_video_download") as span:
+        span.set_attribute("task.id", task_id)
+        span.set_attribute("video.url", video_url)
+
+        def save_progress(stage: str) -> None:
+            """Write one stage update to Redis; a store failure must not fail the job."""
+            try:
+                save_task_progress(task_id, stage)
+            except Exception:
+                logger.warning("task_progress.write_failed", task_id=task_id, stage=stage)
+
+        logger.info("run_video_download.start", task_id=task_id, video_url=video_url)
+        try:
+            purge_expired_downloads()
+            video = download_video(video_url, task_id, progress=save_progress)
+            payload = {
+                "status": "success",
+                "title": video.title,
+                "file_name": safe_filename(video.title, video.path.suffix),
+                "size_bytes": video.size_bytes,
+            }
+            logger.info(
+                "run_video_download.success",
+                task_id=task_id,
+                video_url=video_url,
+                file=str(video.path),
+                size_bytes=video.size_bytes,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "run_video_download.failed",
+                task_id=task_id,
+                video_url=video_url,
+                error=str(e),
+            )
+            payload = {"status": "failed", "error": str(e)}
         save_task_result(task_id, payload)
